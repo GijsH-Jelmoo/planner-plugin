@@ -180,6 +180,18 @@ Runner::tick();
 check('Bronbestand weg: taak mislukt', Store::get_job($id)['status'] === 'failed', Store::get_job($id));
 check('Bronbestand weg: doel onaangeraakt', strpos(file_get_contents($dir . '/Allergenen.pdf'), 'HANDMATIG') !== false);
 
+echo "\n-- Bestand vervangen op een afbeelding met kleinere versies\n";
+$image = imagecreatetruecolor(10, 10);
+imagepng($image, $dir . '/embleem.png');
+imagepng($image, $dir . '/embleem-300x300.png');
+imagepng($image, $dir . '/embleem-nieuw.png');
+imagedestroy($image);
+$id = make_job($uploads['baseurl'] . '/testmenu/embleem.png', $uploads['baseurl'] . '/testmenu/embleem-nieuw.png', 'file');
+Runner::tick();
+$job = Store::get_job($id);
+check('Geen "Geslaagd" als kleinere versies oud blijven', $job['status'] === 'warning', $job);
+check('Melding noemt de kleinere versie', strpos(implode(' ', $job['report']['messages']), 'embleem-300x300.png') !== false, $job['report']);
+
 echo "\n-- Bestand vervangen: geweigerde paden\n";
 file_put_contents($dir . '/plaatje.jpg', 'x');
 file_put_contents($dir . '/Allergenen-nieuw.pdf', "%PDF-1.4\n% NIEUW\n%%EOF\n");

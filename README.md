@@ -8,7 +8,9 @@ Plant het wisselen van een link, het vervangen van een bestand of het tonen van 
 
 - **Link wisselen:** elke knop en menulink naar de oude URL gaat naar de nieuwe URL.
 - **Bestand vervangen:** de URL blijft gelijk en krijgt nieuwe inhoud, voor een geprinte QR-code. Upload het nieuwe bestand eerst via de mediabibliotheek. Het oude bestand wordt bewaard in `uploads/jelmoo-planner-backups`.
-- **Element tonen:** zet het element in de builder op `display: none` en plan het tonen in met zijn ID (`#brxe-abc123`) of class. De plugin zet op dat moment een CSS-regel in de pagina en verandert niets in de builder. Het element staat dus vooraf al in de broncode. De plugin moet actief blijven, tenzij je het element later in de builder zelf zichtbaar maakt.
+- **Element tonen:** zet het element in de builder op `display: none` en plan het tonen in met zijn ID (`#brxe-abc123`) of class. De plugin zet op dat moment een CSS-regel in de pagina en verandert niets in de builder. Het element staat dus vooraf al in de broncode. De plugin moet actief blijven, tenzij je het element later in de builder zelf zichtbaar maakt. Met **Tegelijk verbergen** verdwijnt op hetzelfde moment een ander element, bijvoorbeeld het oude embleem.
+
+Gebruik **Bestand vervangen** niet voor afbeeldingen: de kleinere versies die WordPress maakte blijven dan oud. Gebruik daarvoor Element tonen met Tegelijk verbergen. Ook **Link wisselen** werkt niet voor afbeeldingen die de builder via een ID toont, zoals in Bricks.
 
 Na de wissel krijg je een mail met het resultaat. Op de taakpagina staat per plek wat er is gebeurd, en daar kun je de wissel 90 dagen lang ongedaan maken.
 

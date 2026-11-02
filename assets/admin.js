@@ -61,7 +61,7 @@
         });
     });
 
-    ['jp-old', 'jp-new', 'jp-page', 'jp-selector', 'jp-display'].forEach(function (id) {
+    ['jp-old', 'jp-new', 'jp-page', 'jp-selector', 'jp-hide', 'jp-display'].forEach(function (id) {
         document.getElementById(id).addEventListener('input', invalidate);
     });
 
@@ -141,6 +141,7 @@
         data.append('new_url', document.getElementById('jp-new').value);
         data.append('page_url', document.getElementById('jp-page').value);
         data.append('selector', document.getElementById('jp-selector').value);
+        data.append('hide_selector', document.getElementById('jp-hide').value);
         data.append('display_value', document.getElementById('jp-display').value);
         data.append('cursor', JSON.stringify(cursor));
 

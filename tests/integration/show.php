@@ -113,6 +113,24 @@ echo Runner::undo($id), "\n";
 check('Regel is weg', !ShowElement::rule_is_active(page_html($url), $selector, 'flex'));
 check('Status klopt', Store::get_job($id)['status'] === 'undone');
 
+echo "\n-- Tegelijk verbergen, zoals een oud embleem door een nieuw vervangen\n";
+$swap = Store::create_job(['type' => 'show', 'run_at' => gmdate('Y-m-d H:i:s', time() - 60), 'old_url' => '', 'new_url' => '', 'selector' => $selector, 'display_value' => 'flex', 'hide_selector' => '#brxe-embl02', 'page_url' => $url, 'mail_to' => '']);
+Runner::tick();
+$job = Store::get_job($swap);
+$html = page_html($url);
+check('Taak geslaagd', $job['status'] === 'done', $job);
+check('Nieuw element getoond', ShowElement::rule_is_active($html, $selector, 'flex'));
+check('Oud element verborgen', ShowElement::rule_is_active($html, '#brxe-embl02', 'none'));
+echo Runner::undo($swap), "\n";
+$html = page_html($url);
+check('Ongedaan: beide regels weg', !ShowElement::rule_is_active($html, $selector, 'flex') && !ShowElement::rule_is_active($html, '#brxe-embl02', 'none'));
+
+$typo = Store::create_job(['type' => 'show', 'run_at' => gmdate('Y-m-d H:i:s', time() - 60), 'old_url' => '', 'new_url' => '', 'selector' => $selector, 'display_value' => 'flex', 'hide_selector' => '#brxe-bestaatniet', 'page_url' => $url, 'mail_to' => '']);
+Runner::tick();
+$job = Store::get_job($typo);
+check('Waarschuwing bij onbekend te verbergen element', $job['status'] === 'warning' && $job['report']['pages'][0]['result'] === 'hide_missing', $job);
+Runner::undo($typo);
+
 echo "\n-- Fout element\n";
 $wrong = Store::create_job(['type' => 'show', 'run_at' => gmdate('Y-m-d H:i:s', time() - 60), 'old_url' => '', 'new_url' => '', 'selector' => '#brxe-bestaatniet', 'display_value' => 'flex', 'page_url' => $url, 'mail_to' => '']);
 Runner::tick();

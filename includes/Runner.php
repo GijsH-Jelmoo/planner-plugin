@@ -297,6 +297,12 @@ class Runner
             $messages[] = 'De URL geeft nu het nieuwe bestand terug (inhoud vergeleken).';
         }
 
+        $variants = FileSwap::stale_variants($job['state']['target']);
+        if ($variants) {
+            $messages[] = FileSwap::stale_variants_warning($variants);
+            $problems++;
+        }
+
         $report = ['messages' => $messages];
         $status = $problems ? 'warning' : 'done';
 
@@ -343,6 +349,7 @@ class Runner
             'shown' => 'De pagina bevat het element en de regel die het zichtbaar maakt. Laat de plugin actief, of zet het element in de builder zelf op zichtbaar.',
             'stale' => 'Het element staat op de pagina, maar de regel die het zichtbaar maakt nog niet. Waarschijnlijk zit er nog een cache voor. Leeg die en controleer de pagina.',
             'missing' => 'Het element staat niet op de pagina. Controleer de selector en de pagina-URL.',
+            'hide_missing' => 'Het element dat verborgen moest worden staat niet op de pagina. Controleer die selector.',
             'error' => 'De pagina kon niet worden opgehaald. Controleer hem handmatig.',
         ];
 
@@ -372,7 +379,7 @@ class Runner
 
         Store::update_job($job['id'], $fields);
 
-        if ($result === 'stale' || $result === 'missing') {
+        if (in_array($result, ['stale', 'missing', 'hide_missing'], true)) {
             self::send_mail(Store::get_job($job['id']), 'element nog niet zichtbaar', self::show_message($result) . "\n\nPagina: " . $job['page_url']);
         }
     }
@@ -529,7 +536,7 @@ class Runner
             ShowElement::deactivate($job);
             Store::update_job($id, ['status' => 'undone', 'next_check_at' => null]);
             Flusher::flush($job);
-            return 'De regel is weggehaald. Staat het element in de builder nog op display: none, dan is het weer verborgen.';
+            return 'De wijziging is teruggedraaid. Staat het element in de builder nog op display: none, dan is het weer verborgen.';
         }
 
         if ($job['type'] === 'file') {
@@ -690,7 +697,7 @@ class Runner
 
         $titles = ['done' => 'geslukt', 'warning' => 'gedaan, maar controleer dit', 'failed' => 'mislukt'];
         $lines = $job['type'] === 'show'
-            ? ['Pagina: ' . $job['page_url'], 'Element: ' . $job['selector'] . ' (display: ' . $job['display_value'] . ')', '']
+            ? ['Pagina: ' . $job['page_url'], 'Element: ' . ShowElement::describe($job), '']
             : ['Oud: ' . $job['old_url'], 'Nieuw: ' . $job['new_url'], ''];
 
         foreach ($job['report']['counts'] ?? [] as $state => $count) {
@@ -748,6 +755,7 @@ class Runner
             'shown' => 'Element zichtbaar gemaakt',
             'stale' => 'Nog de oude versie van de pagina',
             'missing' => 'Element niet gevonden',
+            'hide_missing' => 'Te verbergen element niet gevonden',
         ];
 
         return $labels[$result] ?? $result;

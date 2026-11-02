@@ -40,6 +40,29 @@ class ShowElementTest extends TestCase
         $this->assertSame('#brxe-a{display:flex!important}', ShowElement::rule('#brxe-a', 'flex'));
     }
 
+    public function test_regels_met_tegelijk_verbergen(): void
+    {
+        $this->assertSame('#a{display:flex!important}', ShowElement::rules_for('#a', 'flex', ''));
+        $this->assertSame('#a{display:flex!important}#b{display:none!important}', ShowElement::rules_for('#a', 'flex', '#b'));
+    }
+
+    public function test_alleen_eigen_css_wordt_vertrouwd(): void
+    {
+        $this->assertTrue(ShowElement::is_safe_css('#a{display:flex!important}'));
+        $this->assertTrue(ShowElement::is_safe_css('#a{display:flex!important}.b-c{display:none!important}'));
+        $this->assertFalse(ShowElement::is_safe_css('#a{color:red}'));
+        $this->assertFalse(ShowElement::is_safe_css('#a{display:flex!important}</style><script>'));
+        $this->assertFalse(ShowElement::is_safe_css(''));
+        $this->assertFalse(ShowElement::is_safe_css(['#a{display:flex!important}']));
+    }
+
+    public function test_omschrijving(): void
+    {
+        $job = ['selector' => '#a', 'display_value' => 'flex'];
+        $this->assertSame('#a (display: flex)', ShowElement::describe($job));
+        $this->assertSame('#a (display: flex), verbergt #b', ShowElement::describe($job + ['hide_selector' => '#b']));
+    }
+
     public function test_element_vinden_op_id(): void
     {
         $html = '<img class="brxe-image" alt="" id="brxe-zkhxxu" decoding="async" />';

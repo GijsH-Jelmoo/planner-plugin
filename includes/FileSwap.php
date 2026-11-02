@@ -69,6 +69,36 @@ class FileSwap
         return ['target' => $target, 'source' => $source];
     }
 
+    /**
+     * Verkleinde versies die WordPress van een afbeelding maakte (naam-300x300.png).
+     * Die worden niet mee vervangen, terwijl browsers ze via srcset wel kunnen kiezen.
+     *
+     * @return string[]
+     */
+    public static function stale_variants(string $path): array
+    {
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        $base = preg_replace('/-scaled$/', '', pathinfo($path, PATHINFO_FILENAME));
+        $variants = [];
+
+        foreach ((array) glob(dirname($path) . '/*') as $file) {
+            if (preg_match('/^' . preg_quote($base, '/') . '-\d+x\d+\.' . preg_quote($extension, '/') . '$/', basename($file))) {
+                $variants[] = basename($file);
+            }
+        }
+
+        return $variants;
+    }
+
+    public static function stale_variants_warning(array $variants): string
+    {
+        return sprintf(
+            'Dit is een afbeelding met %d kleinere versie(s), zoals %s. Die worden niet vervangen, dus bezoekers kunnen het oude beeld blijven zien. Gebruik voor afbeeldingen Element tonen met Tegelijk verbergen.',
+            count($variants),
+            $variants[0]
+        );
+    }
+
     /** @return array{backup:string,before_hash:string,after_hash:string} */
     public static function swap(string $target, string $source, int $job_id): array
     {

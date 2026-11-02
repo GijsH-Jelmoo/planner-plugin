@@ -36,6 +36,26 @@ class ShowElement
         return $selector . '{display:' . $value . '!important}';
     }
 
+    /** Alle regels van één taak: het element tonen en eventueel een ander tegelijk verbergen. */
+    public static function rules_for(string $selector, string $value, string $hide_selector): string
+    {
+        return self::rule($selector, $value) . ($hide_selector !== '' ? self::rule($hide_selector, 'none') : '');
+    }
+
+    /** Uit de database blijft alles verdacht: alleen exact de vorm die de plugin zelf maakt. */
+    public static function is_safe_css($css): bool
+    {
+        return is_string($css) && preg_match('/^(?:[#.][A-Za-z_][A-Za-z0-9_-]*\{display:[a-z-]+!important\})+$/', $css) === 1;
+    }
+
+    public static function describe(array $job): string
+    {
+        $text = $job['selector'] . ' (display: ' . $job['display_value'] . ')';
+        $hide = $job['hide_selector'] ?? '';
+
+        return $hide !== '' ? $text . ', verbergt ' . $hide : $text;
+    }
+
     /** @return array{found:bool,hidden:bool} staat het element in de HTML, en is de regel display:none zichtbaar */
     public static function inspect(string $html, string $selector): array
     {
@@ -59,7 +79,7 @@ class ShowElement
     public static function activate(array $job): void
     {
         $rules = (array) get_option(self::OPTION, []);
-        $rules[$job['id']] = self::rule($job['selector'], $job['display_value']);
+        $rules[$job['id']] = self::rules_for($job['selector'], $job['display_value'], $job['hide_selector'] ?? '');
         update_option(self::OPTION, $rules, true);
     }
 
@@ -70,19 +90,16 @@ class ShowElement
         update_option(self::OPTION, $rules, true);
     }
 
-    /** De regels worden al bij het inplannen gecontroleerd, maar uit de database blijft alles verdacht. */
     public static function print_css(): void
     {
-        $rules = array_filter((array) get_option(self::OPTION, []), function ($rule) {
-            return is_string($rule) && preg_match('/^[#.][A-Za-z0-9_-]+\{display:[a-z-]+!important\}$/', $rule);
-        });
+        $rules = array_filter((array) get_option(self::OPTION, []), [self::class, 'is_safe_css']);
 
         if ($rules) {
             echo '<style id="jelmoo-planner-css">' . implode('', $rules) . "</style>\n";
         }
     }
 
-    /** @return string shown, stale, missing of error */
+    /** @return string shown, stale, missing, hide_missing of error */
     public static function check_page(array $job): string
     {
         $response = wp_remote_get($job['page_url'], [
@@ -101,6 +118,15 @@ class ShowElement
             return 'missing';
         }
 
-        return self::rule_is_active($html, $job['selector'], $job['display_value']) ? 'shown' : 'stale';
+        $hide = $job['hide_selector'] ?? '';
+
+        if ($hide !== '' && !self::inspect($html, $hide)['found']) {
+            return 'hide_missing';
+        }
+
+        $active = self::rule_is_active($html, $job['selector'], $job['display_value'])
+            && ($hide === '' || self::rule_is_active($html, $hide, 'none'));
+
+        return $active ? 'shown' : 'stale';
     }
 }

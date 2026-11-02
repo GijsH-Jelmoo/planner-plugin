@@ -84,7 +84,7 @@ class Admin
             echo '<td>' . esc_html(self::type_label($job['type'])) . '</td>';
             echo '<td>' . self::status_badge($job) . '</td>';
             echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? $job['page_url'] : $job['old_url']) . '</td>';
-            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? $job['selector'] . ' (display: ' . $job['display_value'] . ')' : $job['new_url']) . '</td>';
+            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? ShowElement::describe($job) : $job['new_url']) . '</td>';
             echo '<td><a href="' . esc_url(self::url(['view' => 'job', 'id' => $job['id']])) . '">Bekijken</a></td>';
             echo '</tr>';
         }
@@ -186,6 +186,11 @@ class Admin
         echo '<p class="description">Het ID (#brxe-abc123) of de class (.embleem) van het element zelf, dus niet van de hele sectie.</p>';
         echo '</td></tr>';
 
+        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-hide">Tegelijk verbergen</label></th><td>';
+        echo '<input type="text" class="regular-text" name="hide_selector" id="jp-hide" placeholder="#brxe-xyz789">';
+        echo '<p class="description">Optioneel. Dit element verdwijnt op hetzelfde moment, bijvoorbeeld het oude embleem dat door het nieuwe wordt vervangen.</p>';
+        echo '</td></tr>';
+
         echo '<tr data-for="show" hidden><th scope="row"><label for="jp-display">Tonen als</label></th><td>';
         echo '<select name="display_value" id="jp-display">';
         foreach (ShowElement::VALUES as $value) {
@@ -229,7 +234,7 @@ class Admin
         self::detail_row('Moment', self::local_time($job['run_at']));
         if ($job['type'] === 'show') {
             self::detail_row('Pagina', (string) $job['page_url']);
-            self::detail_row('Element', $job['selector'] . ' (display: ' . $job['display_value'] . ')');
+            self::detail_row('Element', ShowElement::describe($job));
         } else {
             self::detail_row($job['type'] === 'file' ? 'URL die gelijk blijft' : 'Oude URL', $job['old_url']);
             self::detail_row($job['type'] === 'file' ? 'Nieuw bestand' : 'Nieuwe URL', $job['new_url']);
@@ -294,7 +299,7 @@ class Admin
         }
 
         if (Runner::can_undo($job)) {
-            $confirm = $job['type'] === 'show' ? 'De regel weghalen? Staat het element in de builder nog op display: none, dan verdwijnt het weer.' : 'De wissel terugdraaien?';
+            $confirm = $job['type'] === 'show' ? 'Terugdraaien? Staat het element in de builder nog op display: none, dan verdwijnt het weer.' : 'De wissel terugdraaien?';
             self::action_button('jelmoo_planner_undo', $job['id'], 'Ongedaan maken', 'button-secondary', $confirm);
         }
 
@@ -359,6 +364,7 @@ class Admin
             'new_url' => $type === 'show' ? '' : $new_url,
             'selector' => $type === 'show' ? $show['selector'] : '',
             'display_value' => $type === 'show' ? $show['display_value'] : '',
+            'hide_selector' => $type === 'show' ? $show['hide_selector'] : '',
             'page_url' => $type === 'show' ? $show['page_url'] : null,
             'mail_to' => $mail_to,
         ]);
@@ -477,10 +483,15 @@ class Admin
         return in_array($type, ['file', 'show'], true) ? $type : 'link';
     }
 
-    /** @return array{page_url:string,selector:string,display_value:string} */
+    /** @return array{page_url:string,selector:string,display_value:string,hide_selector:string,hide_invalid:bool} */
     private static function posted_show(): array
     {
+        $hide = trim(wp_unslash((string) ($_POST['hide_selector'] ?? '')));
+        $hide_selector = ShowElement::normalize_selector($hide);
+
         return [
+            'hide_selector' => $hide_selector,
+            'hide_invalid' => $hide !== '' && $hide_selector === '',
             'page_url' => self::clean_url($_POST['page_url'] ?? ''),
             'selector' => ShowElement::normalize_selector(wp_unslash((string) ($_POST['selector'] ?? ''))),
             'display_value' => sanitize_key(wp_unslash((string) ($_POST['display_value'] ?? ''))),
@@ -495,6 +506,14 @@ class Admin
 
         if ($show['selector'] === '') {
             return 'Vul één ID (#brxe-abc123) of class (.embleem) in, zonder spaties of andere tekens.';
+        }
+
+        if ($show['hide_invalid']) {
+            return 'Vul bij Tegelijk verbergen één ID (#brxe-abc123) of class (.embleem) in, of laat het veld leeg.';
+        }
+
+        if ($show['hide_selector'] === $show['selector']) {
+            return 'Het element kan niet tegelijk getoond en verborgen worden.';
         }
 
         if (!ShowElement::is_valid_value($show['display_value'])) {
@@ -518,8 +537,17 @@ class Admin
         $text = 'De pagina kon niet worden opgehaald, dus het element is niet gecontroleerd. Inplannen kan wel.';
 
         if (!is_wp_error($response) && (int) wp_remote_retrieve_response_code($response) < 400) {
-            $seen = ShowElement::inspect(wp_remote_retrieve_body($response), $show['selector']);
+            $html = wp_remote_retrieve_body($response);
+            $seen = ShowElement::inspect($html, $show['selector']);
             $text = $show['selector'] . ' staat op de pagina en wordt op het gekozen moment zichtbaar.';
+
+            if ($show['hide_selector'] !== '') {
+                if (ShowElement::inspect($html, $show['hide_selector'])['found']) {
+                    $text .= ' ' . $show['hide_selector'] . ' verdwijnt op hetzelfde moment.';
+                } else {
+                    $warnings[] = $show['hide_selector'] . ' is niet gevonden op deze pagina, dus dat element kan niet verborgen worden. Controleer de selector.';
+                }
+            }
 
             if (!$seen['found']) {
                 $text = '';
@@ -541,6 +569,11 @@ class Admin
         }
 
         $warnings = [];
+        $variants = FileSwap::stale_variants($files['target']);
+        if ($variants) {
+            $warnings[] = FileSwap::stale_variants_warning($variants);
+        }
+
         $cache_warning = FileSwap::browser_cache_warning($old_url);
         if ($cache_warning !== '') {
             $warnings[] = $cache_warning;
