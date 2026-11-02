@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Jelmoo Planner
- * Description: Plant het wisselen van een link of het vervangen van een bestand (bijvoorbeeld een menukaart) op een vast moment, op elke WordPress-site en met elke builder. Toont vooraf wat er verandert, controleert achteraf de echte pagina's en kan de wissel ongedaan maken.
- * Version: 0.1.1
+ * Description: Plant het wisselen van een link, het vervangen van een bestand (bijvoorbeeld een menukaart) of het tonen van een verborgen element op een vast moment, op elke WordPress-site en met elke builder. Toont vooraf wat er verandert, controleert achteraf de echte pagina's en kan de wissel ongedaan maken.
+ * Version: 0.2.0
  * Author: Jelmoo Studio
  * Requires at least: 5.9
  * Requires PHP: 7.4
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const JELMOO_PLANNER_VERSION = '0.1.1';
+const JELMOO_PLANNER_VERSION = '0.2.0';
 const JELMOO_PLANNER_FILE = __FILE__;
 
 // Updates komen uit de releases van deze repo. Leeg = geen update-check.
@@ -23,12 +23,14 @@ require_once __DIR__ . '/includes/Rewriter.php';
 require_once __DIR__ . '/includes/Store.php';
 require_once __DIR__ . '/includes/Scanner.php';
 require_once __DIR__ . '/includes/FileSwap.php';
+require_once __DIR__ . '/includes/ShowElement.php';
 require_once __DIR__ . '/includes/Flusher.php';
 require_once __DIR__ . '/includes/Runner.php';
 require_once __DIR__ . '/includes/Admin.php';
 
 use Jelmoo\Planner\Admin;
 use Jelmoo\Planner\Runner;
+use Jelmoo\Planner\ShowElement;
 use Jelmoo\Planner\Store;
 
 register_activation_hook(__FILE__, function () {
@@ -53,6 +55,9 @@ add_action(Runner::CONTINUE_HOOK, [Runner::class, 'tick']);
 add_action('init', [Runner::class, 'schedule_tick']);
 
 add_action('admin_init', [Store::class, 'maybe_upgrade']);
+
+// Laat in de head, zodat de regel na de CSS van de builder komt.
+add_action('wp_head', [ShowElement::class, 'print_css'], 999);
 
 Admin::register();
 

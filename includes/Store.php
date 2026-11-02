@@ -9,7 +9,7 @@ namespace Jelmoo\Planner;
  */
 class Store
 {
-    private const DB_VERSION = '1';
+    private const DB_VERSION = '2';
 
     public const LEASE_SECONDS = 240;
 
@@ -42,6 +42,9 @@ class Store
             run_at datetime NOT NULL,
             old_url text NOT NULL,
             new_url text NOT NULL,
+            selector varchar(191) NOT NULL DEFAULT '',
+            display_value varchar(20) NOT NULL DEFAULT '',
+            page_url text NULL,
             mail_to varchar(191) NOT NULL DEFAULT '',
             claimed_at datetime NULL,
             state longtext NULL,

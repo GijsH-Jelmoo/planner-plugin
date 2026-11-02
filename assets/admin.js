@@ -28,9 +28,23 @@
     }
 
     function updateLabels() {
+        var type = selectedType();
+
         form.querySelectorAll('label[data-link]').forEach(function (label) {
-            label.textContent = label.dataset[selectedType()];
+            if (label.dataset[type]) {
+                label.textContent = label.dataset[type];
+            }
         });
+
+        form.querySelectorAll('[data-for]').forEach(function (block) {
+            var active = block.dataset.for.split(' ').indexOf(type) !== -1;
+            block.hidden = !active;
+        });
+
+        document.getElementById('jp-old').required = type !== 'show';
+        document.getElementById('jp-new').required = type !== 'show';
+        document.getElementById('jp-page').required = type === 'show';
+        document.getElementById('jp-selector').required = type === 'show';
     }
 
     // Een oude preview hoort niet meer bij gewijzigde invoer.
@@ -47,7 +61,7 @@
         });
     });
 
-    ['jp-old', 'jp-new'].forEach(function (id) {
+    ['jp-old', 'jp-new', 'jp-page', 'jp-selector', 'jp-display'].forEach(function (id) {
         document.getElementById(id).addEventListener('input', invalidate);
     });
 
@@ -125,6 +139,9 @@
         data.append('type', selectedType());
         data.append('old_url', document.getElementById('jp-old').value);
         data.append('new_url', document.getElementById('jp-new').value);
+        data.append('page_url', document.getElementById('jp-page').value);
+        data.append('selector', document.getElementById('jp-selector').value);
+        data.append('display_value', document.getElementById('jp-display').value);
         data.append('cursor', JSON.stringify(cursor));
 
         return fetch(jelmooPlanner.ajaxUrl, { method: 'POST', credentials: 'same-origin', body: data }).then(function (response) {
@@ -140,8 +157,10 @@
             notice('warning', warning);
         });
 
-        if (file) {
-            notice('info', file);
+        if (file !== undefined) {
+            if (file) {
+                notice('info', file);
+            }
             submitButton.disabled = false;
             return;
         }

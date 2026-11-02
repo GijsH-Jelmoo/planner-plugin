@@ -75,7 +75,11 @@ class Runner
         Store::update_job($id, ['state' => $job['state']]);
 
         try {
-            $finished = $job['type'] === 'file' ? self::advance_file($job) : self::advance_link($job, $deadline);
+            if ($job['type'] === 'show') {
+                $finished = self::advance_show($job);
+            } else {
+                $finished = $job['type'] === 'file' ? self::advance_file($job) : self::advance_link($job, $deadline);
+            }
         } catch (\Throwable $error) {
             error_log('Jelmoo Planner: taak ' . $id . ' mislukt: ' . $error->getMessage());
             self::fail($job, $error->getMessage());
@@ -309,6 +313,70 @@ class Runner
         return true;
     }
 
+    private static function advance_show(array &$job): bool
+    {
+        ShowElement::activate($job);
+        $job['state']['activated'] = true;
+        Store::update_job($job['id'], ['status' => 'finishing', 'state' => $job['state']]);
+        $job['status'] = 'finishing';
+        Flusher::flush($job);
+
+        $result = ShowElement::check_page($job);
+
+        Store::update_job($job['id'], [
+            'status' => $result === 'shown' ? 'done' : 'warning',
+            'report' => ['pages' => [['url' => $job['page_url'], 'result' => $result]], 'messages' => [self::show_message($result)]],
+            'state' => $job['state'],
+            'claimed_at' => null,
+            'finished_at' => Store::now(),
+            'next_check_at' => gmdate('Y-m-d H:i:s', time() + self::CHECK_DELAYS[0]),
+        ]);
+
+        self::send_report(Store::get_job($job['id']));
+
+        return true;
+    }
+
+    private static function show_message(string $result): string
+    {
+        $messages = [
+            'shown' => 'De pagina bevat het element en de regel die het zichtbaar maakt. Laat de plugin actief, of zet het element in de builder zelf op zichtbaar.',
+            'stale' => 'Het element staat op de pagina, maar de regel die het zichtbaar maakt nog niet. Waarschijnlijk zit er nog een cache voor. Leeg die en controleer de pagina.',
+            'missing' => 'Het element staat niet op de pagina. Controleer de selector en de pagina-URL.',
+            'error' => 'De pagina kon niet worden opgehaald. Controleer hem handmatig.',
+        ];
+
+        return $messages[$result] ?? $result;
+    }
+
+    /** Nacontrole voor Element tonen: een late purge kan alsnog doorkomen. */
+    private static function follow_up_show(array $job): void
+    {
+        $result = ShowElement::check_page($job);
+        $checks_done = (int) $job['checks_done'] + 1;
+        $next = self::CHECK_DELAYS[$checks_done] ?? null;
+
+        $report = $job['report'];
+        $report['checks'][] = ['at' => Store::now(), 'unexpected' => [], 'pages' => [['url' => $job['page_url'], 'result' => $result]]];
+
+        $fields = [
+            'checks_done' => $checks_done,
+            'next_check_at' => $next ? gmdate('Y-m-d H:i:s', time() + $next) : null,
+            'report' => $report,
+            'claimed_at' => null,
+        ];
+
+        if ($result === 'shown') {
+            $fields['status'] = 'done';
+        }
+
+        Store::update_job($job['id'], $fields);
+
+        if ($result === 'stale' || $result === 'missing') {
+            self::send_mail(Store::get_job($job['id']), 'element nog niet zichtbaar', self::show_message($result) . "\n\nPagina: " . $job['page_url']);
+        }
+    }
+
     private static function finish(array $job, Variants $variants): void
     {
         $counts = Store::count_by_state($job['id']);
@@ -384,6 +452,12 @@ class Runner
     private static function follow_up_check(int $id, float $deadline): void
     {
         $job = Store::get_job($id);
+
+        if ($job && $job['type'] === 'show' && in_array($job['status'], ['done', 'warning'], true)) {
+            self::follow_up_show($job);
+            return;
+        }
+
         if (!$job || $job['type'] === 'file' || !in_array($job['status'], ['done', 'warning'], true)) {
             if ($job) {
                 Store::update_job($id, ['next_check_at' => null, 'claimed_at' => null]);
@@ -451,6 +525,13 @@ class Runner
             return 'Deze wissel kan niet (meer) ongedaan gemaakt worden.';
         }
 
+        if ($job['type'] === 'show') {
+            ShowElement::deactivate($job);
+            Store::update_job($id, ['status' => 'undone', 'next_check_at' => null]);
+            Flusher::flush($job);
+            return 'De regel is weggehaald. Staat het element in de builder nog op display: none, dan is het weer verborgen.';
+        }
+
         if ($job['type'] === 'file') {
             FileSwap::restore($job['state']['target'], $job['state']);
             Store::update_job($id, ['status' => 'undone', 'next_check_at' => null]);
@@ -496,6 +577,11 @@ class Runner
     {
         if (!in_array($job['status'], ['done', 'warning', 'failed'], true) || empty($job['finished_at'])) {
             return false;
+        }
+
+        // Geen bewaartermijn: de regel staat er zolang de taak niet is teruggedraaid.
+        if ($job['type'] === 'show') {
+            return !empty($job['state']['activated']);
         }
 
         if (strtotime($job['finished_at'] . ' UTC') < time() - self::KEEP_UNDO_DAYS * DAY_IN_SECONDS) {
@@ -555,7 +641,7 @@ class Runner
         return ['result' => 'ok', 'message' => ''];
     }
 
-    private static function same_site(string $url): bool
+    public static function same_site(string $url): bool
     {
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
         $site = strtolower((string) parse_url(home_url('/'), PHP_URL_HOST));
@@ -603,11 +689,9 @@ class Runner
         }
 
         $titles = ['done' => 'geslukt', 'warning' => 'gedaan, maar controleer dit', 'failed' => 'mislukt'];
-        $lines = [
-            'Oud: ' . $job['old_url'],
-            'Nieuw: ' . $job['new_url'],
-            '',
-        ];
+        $lines = $job['type'] === 'show'
+            ? ['Pagina: ' . $job['page_url'], 'Element: ' . $job['selector'] . ' (display: ' . $job['display_value'] . ')', '']
+            : ['Oud: ' . $job['old_url'], 'Nieuw: ' . $job['new_url'], ''];
 
         foreach ($job['report']['counts'] ?? [] as $state => $count) {
             $lines[] = self::state_label($state) . ': ' . $count['rows'];
@@ -657,7 +741,14 @@ class Runner
 
     public static function page_label(string $result): string
     {
-        $labels = ['ok' => 'Oude link weg', 'old' => 'Oude link nog zichtbaar', 'error' => 'Niet te controleren'];
+        $labels = [
+            'ok' => 'Oude link weg',
+            'old' => 'Oude link nog zichtbaar',
+            'error' => 'Niet te controleren',
+            'shown' => 'Element zichtbaar gemaakt',
+            'stale' => 'Nog de oude versie van de pagina',
+            'missing' => 'Element niet gevonden',
+        ];
 
         return $labels[$result] ?? $result;
     }

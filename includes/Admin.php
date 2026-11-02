@@ -77,14 +77,14 @@ class Admin
             return;
         }
 
-        echo '<table class="widefat striped"><thead><tr><th>Moment</th><th>Soort</th><th>Status</th><th>Oud</th><th>Nieuw</th><th></th></tr></thead><tbody>';
+        echo '<table class="widefat striped"><thead><tr><th>Moment</th><th>Soort</th><th>Status</th><th>Oud / pagina</th><th>Nieuw / element</th><th></th></tr></thead><tbody>';
         foreach ($jobs as $job) {
             echo '<tr>';
             echo '<td>' . esc_html(self::local_time($job['run_at'])) . '</td>';
             echo '<td>' . esc_html(self::type_label($job['type'])) . '</td>';
             echo '<td>' . self::status_badge($job) . '</td>';
-            echo '<td class="jp-url">' . esc_html($job['old_url']) . '</td>';
-            echo '<td class="jp-url">' . esc_html($job['new_url']) . '</td>';
+            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? $job['page_url'] : $job['old_url']) . '</td>';
+            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? $job['selector'] . ' (display: ' . $job['display_value'] . ')' : $job['new_url']) . '</td>';
             echo '<td><a href="' . esc_url(self::url(['view' => 'job', 'id' => $job['id']])) . '">Bekijken</a></td>';
             echo '</tr>';
         }
@@ -164,15 +164,34 @@ class Admin
 
         echo '<tr><th scope="row">Soort</th><td><fieldset>';
         echo '<label><input type="radio" name="type" value="link" checked> <strong>Link wisselen</strong>: elke knop en menulink naar de oude URL gaat naar de nieuwe URL</label><br>';
-        echo '<label><input type="radio" name="type" value="file"> <strong>Bestand vervangen</strong>: de URL blijft gelijk en krijgt nieuwe inhoud, voor een geprinte QR-code</label>';
+        echo '<label><input type="radio" name="type" value="file"> <strong>Bestand vervangen</strong>: de URL blijft gelijk en krijgt nieuwe inhoud, voor een geprinte QR-code</label><br>';
+        echo '<label><input type="radio" name="type" value="show"> <strong>Element tonen</strong>: een element dat in de builder op display: none staat wordt zichtbaar</label>';
         echo '</fieldset></td></tr>';
 
-        echo '<tr><th scope="row"><label for="jp-old" data-link="Oude URL" data-file="URL die gelijk blijft">Oude URL</label></th><td>';
+        echo '<tr data-for="link file"><th scope="row"><label for="jp-old" data-link="Oude URL" data-file="URL die gelijk blijft">Oude URL</label></th><td>';
         echo '<input type="url" class="large-text" name="old_url" id="jp-old" required> <button type="button" class="button jp-pick" data-target="jp-old">Mediabibliotheek</button>';
         echo '</td></tr>';
 
-        echo '<tr><th scope="row"><label for="jp-new" data-link="Nieuwe URL" data-file="Nieuw bestand">Nieuwe URL</label></th><td>';
+        echo '<tr data-for="link file"><th scope="row"><label for="jp-new" data-link="Nieuwe URL" data-file="Nieuw bestand">Nieuwe URL</label></th><td>';
         echo '<input type="url" class="large-text" name="new_url" id="jp-new" required> <button type="button" class="button jp-pick" data-target="jp-new">Mediabibliotheek</button>';
+        echo '</td></tr>';
+
+        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-page">Pagina</label></th><td>';
+        echo '<input type="url" class="large-text" name="page_url" id="jp-page" value="' . esc_attr(home_url('/')) . '">';
+        echo '<p class="description">Een pagina van deze site waarop het element staat. Hierop controleert de plugin het resultaat.</p>';
+        echo '</td></tr>';
+
+        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-selector">Element</label></th><td>';
+        echo '<input type="text" class="regular-text" name="selector" id="jp-selector" placeholder="#brxe-abc123">';
+        echo '<p class="description">Het ID (#brxe-abc123) of de class (.embleem) van het element zelf, dus niet van de hele sectie.</p>';
+        echo '</td></tr>';
+
+        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-display">Tonen als</label></th><td>';
+        echo '<select name="display_value" id="jp-display">';
+        foreach (ShowElement::VALUES as $value) {
+            echo '<option value="' . esc_attr($value) . '">' . esc_html($value) . '</option>';
+        }
+        echo '</select>';
         echo '</td></tr>';
 
         echo '<tr><th scope="row"><label for="jp-run">Moment</label></th><td>';
@@ -189,7 +208,7 @@ class Admin
         echo '<p><button type="button" class="button button-secondary" id="jp-scan">Scannen</button> <span id="jp-scan-status" aria-live="polite"></span></p>';
         echo '<div id="jp-preview"></div>';
 
-        echo '<p class="description jp-limits">Niet in de scan: eigen tabellen van plugins (zoals sliders), themabestanden en Code Snippets. Verwijzingen via een bestands-ID en gecodeerde blokken (zoals raw HTML in WPBakery) worden ook niet gevonden; de paginacontrole na de wissel meldt het als zo\'n link zichtbaar blijft. Haal oude WP Crontrol-events voor dezelfde wissel weg, anders kunnen ze hem terugdraaien.</p>';
+        echo '<p class="description jp-limits" data-for="link file">Niet in de scan: eigen tabellen van plugins (zoals sliders), themabestanden en Code Snippets. Verwijzingen via een bestands-ID en gecodeerde blokken (zoals raw HTML in WPBakery) worden ook niet gevonden; de paginacontrole na de wissel meldt het als zo\'n link zichtbaar blijft. Haal oude WP Crontrol-events voor dezelfde wissel weg, anders kunnen ze hem terugdraaien.</p>';
 
         echo '<p><button type="submit" class="button button-primary" id="jp-submit" disabled>Inplannen</button></p>';
         echo '</form>';
@@ -208,8 +227,13 @@ class Admin
 
         echo '<table class="form-table" role="presentation"><tbody>';
         self::detail_row('Moment', self::local_time($job['run_at']));
-        self::detail_row($job['type'] === 'file' ? 'URL die gelijk blijft' : 'Oude URL', $job['old_url']);
-        self::detail_row($job['type'] === 'file' ? 'Nieuw bestand' : 'Nieuwe URL', $job['new_url']);
+        if ($job['type'] === 'show') {
+            self::detail_row('Pagina', (string) $job['page_url']);
+            self::detail_row('Element', $job['selector'] . ' (display: ' . $job['display_value'] . ')');
+        } else {
+            self::detail_row($job['type'] === 'file' ? 'URL die gelijk blijft' : 'Oude URL', $job['old_url']);
+            self::detail_row($job['type'] === 'file' ? 'Nieuw bestand' : 'Nieuwe URL', $job['new_url']);
+        }
         if ($job['mail_to'] !== '') {
             self::detail_row('Resultaat naar', $job['mail_to']);
         }
@@ -239,6 +263,12 @@ class Admin
             $old = count(array_filter($check['pages'], function ($page) {
                 return $page['result'] === 'old';
             }));
+
+            if ($job['type'] === 'show') {
+                echo '<p>Nacontrole ' . esc_html(self::local_time($check['at'])) . ': ' . esc_html(Runner::page_label($check['pages'][0]['result'] ?? 'error')) . '.</p>';
+                continue;
+            }
+
             echo '<p>Nacontrole ' . esc_html(self::local_time($check['at'])) . ': ' . (int) count($check['unexpected']) . ' nieuwe plek(ken) in de database, ' . (int) $old . ' pagina(\'s) met de oude link.</p>';
         }
 
@@ -264,7 +294,8 @@ class Admin
         }
 
         if (Runner::can_undo($job)) {
-            self::action_button('jelmoo_planner_undo', $job['id'], 'Ongedaan maken', 'button-secondary', 'De wissel terugdraaien?');
+            $confirm = $job['type'] === 'show' ? 'De regel weghalen? Staat het element in de builder nog op display: none, dan verdwijnt het weer.' : 'De wissel terugdraaien?';
+            self::action_button('jelmoo_planner_undo', $job['id'], 'Ongedaan maken', 'button-secondary', $confirm);
         }
 
         echo '</div>';
@@ -289,27 +320,32 @@ class Admin
     {
         self::guard('jelmoo_planner_create');
 
-        $type = ($_POST['type'] ?? '') === 'file' ? 'file' : 'link';
+        $type = self::posted_type();
         $old_url = self::clean_url($_POST['old_url'] ?? '');
         $new_url = self::clean_url($_POST['new_url'] ?? '');
+        $show = self::posted_show();
         $mail_to = sanitize_email(wp_unslash($_POST['mail_to'] ?? ''));
         $run_at = \DateTimeImmutable::createFromFormat('Y-m-d\TH:i', sanitize_text_field(wp_unslash($_POST['run_at'] ?? '')), wp_timezone());
 
         $error = '';
-        if ($old_url === '' || $new_url === '') {
+        if ($type === 'show') {
+            $error = self::show_error($show);
+        } elseif ($old_url === '' || $new_url === '') {
             $error = 'Vul een volledige oude en nieuwe URL in (met https://).';
         } elseif (self::same_url($old_url, $new_url)) {
             $error = 'De oude en de nieuwe URL zijn hetzelfde.';
-        } elseif (!$run_at) {
-            $error = 'Het moment is niet geldig.';
-        } elseif ($run_at->getTimestamp() <= time()) {
-            $error = 'Het moment ligt in het verleden. Kies een moment in de toekomst.';
         } elseif ($type === 'file') {
             try {
                 FileSwap::validate($old_url, $new_url);
             } catch (\RuntimeException $problem) {
                 $error = $problem->getMessage();
             }
+        }
+
+        if ($error === '' && !$run_at) {
+            $error = 'Het moment is niet geldig.';
+        } elseif ($error === '' && $run_at->getTimestamp() <= time()) {
+            $error = 'Het moment ligt in het verleden. Kies een moment in de toekomst.';
         }
 
         if ($error !== '') {
@@ -319,8 +355,11 @@ class Admin
         $id = Store::create_job([
             'type' => $type,
             'run_at' => gmdate('Y-m-d H:i:s', $run_at->getTimestamp()),
-            'old_url' => $old_url,
-            'new_url' => $new_url,
+            'old_url' => $type === 'show' ? '' : $old_url,
+            'new_url' => $type === 'show' ? '' : $new_url,
+            'selector' => $type === 'show' ? $show['selector'] : '',
+            'display_value' => $type === 'show' ? $show['display_value'] : '',
+            'page_url' => $type === 'show' ? $show['page_url'] : null,
             'mail_to' => $mail_to,
         ]);
 
@@ -379,7 +418,12 @@ class Admin
             wp_send_json_error(['message' => 'Geen toegang.'], 403);
         }
 
-        $type = ($_POST['type'] ?? '') === 'file' ? 'file' : 'link';
+        $type = self::posted_type();
+
+        if ($type === 'show') {
+            self::scan_show();
+        }
+
         $old_url = self::clean_url($_POST['old_url'] ?? '');
         $new_url = self::clean_url($_POST['new_url'] ?? '');
 
@@ -424,6 +468,68 @@ class Admin
         });
 
         wp_send_json_success(['rows' => $rows, 'cursor' => $cursor, 'done' => !empty($cursor['done']), 'warnings' => $warnings]);
+    }
+
+    private static function posted_type(): string
+    {
+        $type = $_POST['type'] ?? '';
+
+        return in_array($type, ['file', 'show'], true) ? $type : 'link';
+    }
+
+    /** @return array{page_url:string,selector:string,display_value:string} */
+    private static function posted_show(): array
+    {
+        return [
+            'page_url' => self::clean_url($_POST['page_url'] ?? ''),
+            'selector' => ShowElement::normalize_selector(wp_unslash((string) ($_POST['selector'] ?? ''))),
+            'display_value' => sanitize_key(wp_unslash((string) ($_POST['display_value'] ?? ''))),
+        ];
+    }
+
+    private static function show_error(array $show): string
+    {
+        if ($show['page_url'] === '' || !Runner::same_site($show['page_url'])) {
+            return 'Vul een volledige URL in van een pagina op deze site.';
+        }
+
+        if ($show['selector'] === '') {
+            return 'Vul één ID (#brxe-abc123) of class (.embleem) in, zonder spaties of andere tekens.';
+        }
+
+        if (!ShowElement::is_valid_value($show['display_value'])) {
+            return 'Kies hoe het element getoond moet worden.';
+        }
+
+        return '';
+    }
+
+    /** Kijkt alleen: staat het element op de pagina en is het nu verborgen? */
+    private static function scan_show(): void
+    {
+        $show = self::posted_show();
+        $error = self::show_error($show);
+        if ($error !== '') {
+            wp_send_json_error(['message' => $error]);
+        }
+
+        $response = wp_remote_get($show['page_url'], ['timeout' => 15, 'redirection' => 3, 'sslverify' => apply_filters('https_local_ssl_verify', false)]);
+        $warnings = [];
+        $text = 'De pagina kon niet worden opgehaald, dus het element is niet gecontroleerd. Inplannen kan wel.';
+
+        if (!is_wp_error($response) && (int) wp_remote_retrieve_response_code($response) < 400) {
+            $seen = ShowElement::inspect(wp_remote_retrieve_body($response), $show['selector']);
+            $text = $show['selector'] . ' staat op de pagina en wordt op het gekozen moment zichtbaar.';
+
+            if (!$seen['found']) {
+                $text = '';
+                $warnings[] = $show['selector'] . ' is niet gevonden op deze pagina. Controleer de selector en de pagina. Heb je het element net toegevoegd, leeg dan eerst de cache en scan opnieuw.';
+            } elseif (!$seen['hidden']) {
+                $warnings[] = 'Er is geen display: none gevonden voor ' . $show['selector'] . ' in de HTML van deze pagina. Staat de CSS in een los bestand, dan is dat normaal. Controleer anders of het element in de builder verborgen is, want dan is het nu al zichtbaar.';
+            }
+        }
+
+        wp_send_json_success(['rows' => [], 'cursor' => ['done' => true], 'done' => true, 'warnings' => $warnings, 'file' => $text]);
     }
 
     private static function scan_file(string $old_url, string $new_url): void
@@ -507,7 +613,9 @@ class Admin
 
     private static function type_label(string $type): string
     {
-        return $type === 'file' ? 'Bestand vervangen' : 'Link wisselen';
+        $labels = ['file' => 'Bestand vervangen', 'show' => 'Element tonen'];
+
+        return $labels[$type] ?? 'Link wisselen';
     }
 
     private static function status_badge(array $job): string

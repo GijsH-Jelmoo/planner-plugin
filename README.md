@@ -1,6 +1,6 @@
 # Jelmoo Planner
 
-Plant het wisselen van een link of het vervangen van een bestand op een vast moment, op elke WordPress-site. Bedoeld voor menukaarten die per seizoen wisselen.
+Plant het wisselen van een link, het vervangen van een bestand of het tonen van een verborgen element op een vast moment, op elke WordPress-site. Bedoeld voor menukaarten die per seizoen wisselen en emblemen die op een datum online moeten.
 
 ## Gebruik
 
@@ -8,6 +8,7 @@ Plant het wisselen van een link of het vervangen van een bestand op een vast mom
 
 - **Link wisselen:** elke knop en menulink naar de oude URL gaat naar de nieuwe URL.
 - **Bestand vervangen:** de URL blijft gelijk en krijgt nieuwe inhoud, voor een geprinte QR-code. Upload het nieuwe bestand eerst via de mediabibliotheek. Het oude bestand wordt bewaard in `uploads/jelmoo-planner-backups`.
+- **Element tonen:** zet het element in de builder op `display: none` en plan het tonen in met zijn ID (`#brxe-abc123`) of class. De plugin zet op dat moment een CSS-regel in de pagina en verandert niets in de builder. Het element staat dus vooraf al in de broncode. De plugin moet actief blijven, tenzij je het element later in de builder zelf zichtbaar maakt.
 
 Na de wissel krijg je een mail met het resultaat. Op de taakpagina staat per plek wat er is gebeurd, en daar kun je de wissel 90 dagen lang ongedaan maken.
 
@@ -41,6 +42,7 @@ cd ~/Documents/Wordpress/planner-test && docker compose up -d
 ~/Documents/Plugins/Planner/tests/integration/run.sh
 docker compose exec -T -u www-data wordpress php /var/www/html/wp-content/plugins/jelmoo-planner/tests/integration/failures.php
 docker compose run --rm -T cli eval-file /var/www/html/wp-content/plugins/jelmoo-planner/tests/integration/corpus.php
+docker compose exec -T -u www-data wordpress php /var/www/html/wp-content/plugins/jelmoo-planner/tests/integration/show.php
 ```
 
 `run.sh` leegt de testsite en test het actieve thema. Bricks test je met `docker compose run --rm -T cli theme activate bricks`.

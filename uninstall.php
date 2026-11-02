@@ -12,6 +12,7 @@ $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}jelmoo_planner_jobs");
 
 delete_option('jelmoo_planner_db_version');
 delete_option('jelmoo_planner_last_tick');
+delete_option('jelmoo_planner_active_css');
 
 wp_clear_scheduled_hook('jelmoo_planner_tick');
 wp_clear_scheduled_hook('jelmoo_planner_continue');
