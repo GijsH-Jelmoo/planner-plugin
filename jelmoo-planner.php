@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Jelmoo Planner
  * Description: Plant het wisselen van een link of het vervangen van een bestand (bijvoorbeeld een menukaart) op een vast moment, op elke WordPress-site en met elke builder. Toont vooraf wat er verandert, controleert achteraf de echte pagina's en kan de wissel ongedaan maken.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: Jelmoo Studio
  * Requires at least: 5.9
  * Requires PHP: 7.4
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const JELMOO_PLANNER_VERSION = '0.1.0';
+const JELMOO_PLANNER_VERSION = '0.1.1';
 const JELMOO_PLANNER_FILE = __FILE__;
 
 // Updates komen uit de releases van deze repo. Leeg = geen update-check.
