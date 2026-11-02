@@ -62,6 +62,11 @@ add_action('plugins_loaded', function () {
         return;
     }
 
+    // Een update vervangt de hele pluginmap; in een git-checkout zou dat de broncode wissen.
+    if (file_exists(__DIR__ . '/.git')) {
+        return;
+    }
+
     require_once $autoload;
 
     $checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(JELMOO_PLANNER_REPO, __FILE__, 'jelmoo-planner');
