@@ -1,0 +1,54 @@
+.jelmoo-planner .jp-url {
+    word-break: break-all;
+}
+
+.jelmoo-planner .jp-inline {
+    display: inline-block;
+}
+
+.jelmoo-planner .jp-actions {
+    margin: 1em 0;
+}
+
+.jelmoo-planner .jp-limits {
+    max-width: 780px;
+}
+
+.jelmoo-planner .jp-pick {
+    margin-top: 4px;
+}
+
+.jelmoo-planner .notice.inline {
+    margin: 1em 0;
+}
+
+.jelmoo-planner #jp-preview table {
+    margin: 1em 0;
+}
+
+.jp-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: #dcdcde;
+    color: #1d2327;
+    font-size: 12px;
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+.jp-status-scheduled {
+    background: #cfe2f3;
+}
+
+.jp-status-done {
+    background: #c6e9c9;
+}
+
+.jp-status-warning {
+    background: #fce8b2;
+}
+
+.jp-status-failed {
+    background: #f6c6c6;
+}
