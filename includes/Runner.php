@@ -25,6 +25,12 @@ class Runner
         }
     }
 
+    /** Eigen event op het exacte moment, zodat een taak niet op de volgende tick hoeft te wachten. */
+    public static function schedule_job(int $id, int $timestamp): void
+    {
+        wp_schedule_single_event($timestamp, self::CONTINUE_HOOK, [$id]);
+    }
+
     public static function tick(): void
     {
         update_option('jelmoo_planner_last_tick', time(), false);
@@ -394,6 +400,10 @@ class Runner
         $unexpected = array_values(array_diff($job['state']['remaining'] ?? [], $known));
 
         $messages = $job['state']['messages'] ?? [];
+        $plan = Attachments::plan($job['old_url'], $job['new_url']);
+        if ($plan['old_id'] && !$plan['new_id']) {
+            $messages[] = 'De oude URL is een bestand uit de mediabibliotheek, de nieuwe niet. Builders die via het bestands-ID werken, blijven daardoor het oude bestand tonen. Kies het nieuwe bestand uit de mediabibliotheek.';
+        }
         if ($applied === 0) {
             $messages[] = 'De oude URL is nergens gewijzigd. Staat de link misschien op een plek buiten de database of al op de nieuwe URL?';
         }
@@ -402,7 +412,7 @@ class Runner
             return $page['result'] === 'old';
         });
         if ($old_pages) {
-            $messages[] = 'Op ' . count($old_pages) . ' pagina(\'s) staat de oude URL nog in de HTML. Dat kan een cache zijn, of een verwijzing die niet in de scan zit (bijv. via een bestands-ID).';
+            $messages[] = 'Op ' . count($old_pages) . ' pagina(\'s) staat de oude URL nog in de HTML. Dat kan een cache zijn, of een plek die de plugin niet kan aanpassen. Open de pagina om het te controleren.';
         }
 
         $not_changed = ($counts['skipped']['rows'] ?? 0) + ($counts['suspect']['rows'] ?? 0) + ($counts['failed']['rows'] ?? 0);
@@ -414,7 +424,7 @@ class Runner
             $messages[] = 'Na de wissel staat de oude URL nog op ' . count($unexpected) . ' plek(ken) in de database. Mogelijk is daar tijdens de wissel iets opgeslagen.';
         }
 
-        $has_problem = $applied === 0 || $old_pages || $unexpected
+        $has_problem = $applied === 0 || $old_pages || $unexpected || ($plan['old_id'] && !$plan['new_id'])
             || !empty($counts['skipped']) || !empty($counts['suspect']) || !empty($counts['failed']);
 
         $report = [
@@ -686,7 +696,7 @@ class Runner
 
     public static function variants_for(array $job): Variants
     {
-        return new Variants($job['old_url'], $job['new_url'], home_url('/'));
+        return Attachments::variants($job['old_url'], $job['new_url']);
     }
 
     private static function send_report(?array $job): void
@@ -697,8 +707,14 @@ class Runner
 
         $titles = ['done' => 'geslukt', 'warning' => 'gedaan, maar controleer dit', 'failed' => 'mislukt'];
         $lines = $job['type'] === 'show'
-            ? ['Pagina: ' . $job['page_url'], 'Element: ' . ShowElement::describe($job), '']
-            : ['Oud: ' . $job['old_url'], 'Nieuw: ' . $job['new_url'], ''];
+            ? ['Pagina: ' . $job['page_url'], 'Element: ' . ShowElement::describe($job)]
+            : ['Oud: ' . $job['old_url'], 'Nieuw: ' . $job['new_url']];
+
+        $lines[] = 'Gepland: ' . Time::full(Time::from_utc($job['run_at']));
+        if (!empty($job['finished_at'])) {
+            $lines[] = 'Uitgevoerd: ' . Time::full(Time::from_utc($job['finished_at']));
+        }
+        $lines[] = '';
 
         foreach ($job['report']['counts'] ?? [] as $state => $count) {
             $lines[] = self::state_label($state) . ': ' . $count['rows'];

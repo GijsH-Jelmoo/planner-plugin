@@ -24,11 +24,40 @@ class Flusher
             }
         }
 
+        self::refresh_bricks_css($job);
+
         do_action('litespeed_purge_all', 'Jelmoo Planner');
 
         do_action('jelmoo_planner_after_swap', $job);
 
         self::kick();
+    }
+
+    /*
+     * Met "External Files" staan achtergrondafbeeldingen in een CSS-bestand per pagina.
+     * Bricks maakt dat alleen opnieuw bij opslaan, en de wissel schrijft rechtstreeks.
+     */
+    private static function refresh_bricks_css(array $job): void
+    {
+        if (!class_exists('\Bricks\Assets_Files') || !class_exists('\Bricks\Database') || \Bricks\Database::get_setting('cssLoading') !== 'file') {
+            return;
+        }
+
+        $posts = [];
+        foreach (Store::row_summaries($job['id']) as $row) {
+            if ($row['target'] === 'postmeta' && strpos($row['field'], '_bricks_page_') === 0) {
+                $posts[(int) $row['owner_id']] = true;
+            }
+        }
+
+        foreach (array_keys($posts) as $post_id) {
+            try {
+                // Een index boven 0: Bricks gooit dan niet eerst alle CSS-bestanden weg.
+                \Bricks\Assets_Files::regenerate_css_file((string) $post_id, 1, true);
+            } catch (\Throwable $error) {
+                error_log('Jelmoo Planner: Bricks-CSS maken mislukt: ' . $error->getMessage());
+            }
+        }
     }
 
     /*

@@ -93,7 +93,7 @@ class FileSwap
     public static function stale_variants_warning(array $variants): string
     {
         return sprintf(
-            'Dit is een afbeelding met %d kleinere versie(s), zoals %s. Die worden niet vervangen, dus bezoekers kunnen het oude beeld blijven zien. Gebruik voor afbeeldingen Element tonen met Tegelijk verbergen.',
+            'Dit is een afbeelding met %d kleinere versie(s), zoals %s. Die worden niet vervangen, dus bezoekers kunnen het oude beeld blijven zien. Gebruik voor afbeeldingen Link wisselen met het nieuwe bestand uit de mediabibliotheek.',
             count($variants),
             $variants[0]
         );

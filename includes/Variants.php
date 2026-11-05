@@ -28,8 +28,24 @@ class Variants
     /** @var bool */
     private $suspect_eligible = false;
 
-    public function __construct(string $old_url, string $new_url, string $site_url)
+    /** @var Variants[] kleinere versies en andere vormen van hetzelfde bestand */
+    private $also = [];
+
+    /** @var AttachmentRefs|null */
+    private $attachment;
+
+    /**
+     * @param array<string,string> $also extra URL-paren: oud => nieuw
+     */
+    public function __construct(string $old_url, string $new_url, string $site_url, array $also = [], ?AttachmentRefs $attachment = null)
     {
+        $this->attachment = $attachment;
+
+        // Eén grote regex per bestand zou bij veel formaten de limiet van PCRE raken.
+        foreach ($also as $extra_old => $extra_new) {
+            $this->also[] = new self((string) $extra_old, (string) $extra_new, $site_url);
+        }
+
         $old_url = trim($old_url);
         $new_url = trim($new_url);
 
@@ -103,18 +119,44 @@ class Variants
             throw new \RuntimeException('Regex-fout bij vervangen: ' . preg_last_error());
         }
 
+        foreach ($this->also as $variant) {
+            list($result, $extra) = $variant->replace($result);
+            $count += $extra;
+        }
+
         return [$result, $count];
     }
 
     public function matches(string $text): bool
     {
-        return preg_match($this->regex, $text) === 1;
+        if (preg_match($this->regex, $text) === 1) {
+            return true;
+        }
+
+        foreach ($this->also as $variant) {
+            if ($variant->matches($text)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Termen om in SQL kandidaat-rijen mee te vinden; PHP bepaalt daarna de echte treffer. */
     public function search_terms(): array
     {
-        return $this->search_terms;
+        $terms = $this->search_terms;
+
+        foreach ($this->also as $variant) {
+            $terms = array_merge($terms, $variant->search_terms());
+        }
+
+        return array_values(array_unique($terms));
+    }
+
+    public function attachment(): ?AttachmentRefs
+    {
+        return $this->attachment;
     }
 
     /**
@@ -128,7 +170,7 @@ class Variants
             return false;
         }
 
-        foreach ($this->search_terms as $term) {
+        foreach ($this->search_terms() as $term) {
             if (strpos($text, $term) !== false) {
                 return true;
             }

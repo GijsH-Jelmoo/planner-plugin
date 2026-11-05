@@ -15,4 +15,4 @@ delete_option('jelmoo_planner_last_tick');
 delete_option('jelmoo_planner_active_css');
 
 wp_clear_scheduled_hook('jelmoo_planner_tick');
-wp_clear_scheduled_hook('jelmoo_planner_continue');
+wp_unschedule_hook('jelmoo_planner_continue');

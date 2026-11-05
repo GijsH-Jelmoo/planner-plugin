@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Jelmoo Planner
  * Description: Plant het wisselen van een link, het vervangen van een bestand (bijvoorbeeld een menukaart) of het tonen van een verborgen element op een vast moment, op elke WordPress-site en met elke builder. Toont vooraf wat er verandert, controleert achteraf de echte pagina's en kan de wissel ongedaan maken.
- * Version: 0.3.0
+ * Version: 0.4.0
  * Author: Jelmoo Studio
  * Requires at least: 5.9
  * Requires PHP: 7.4
@@ -12,16 +12,19 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-const JELMOO_PLANNER_VERSION = '0.3.0';
+const JELMOO_PLANNER_VERSION = '0.4.0';
 const JELMOO_PLANNER_FILE = __FILE__;
 
 // Updates komen uit de releases van deze repo. Leeg = geen update-check.
 const JELMOO_PLANNER_REPO = 'https://github.com/GijsH-Jelmoo/planner-plugin/';
 
+require_once __DIR__ . '/includes/Time.php';
+require_once __DIR__ . '/includes/AttachmentRefs.php';
 require_once __DIR__ . '/includes/Variants.php';
 require_once __DIR__ . '/includes/Rewriter.php';
 require_once __DIR__ . '/includes/Store.php';
 require_once __DIR__ . '/includes/Scanner.php';
+require_once __DIR__ . '/includes/Attachments.php';
 require_once __DIR__ . '/includes/FileSwap.php';
 require_once __DIR__ . '/includes/ShowElement.php';
 require_once __DIR__ . '/includes/Flusher.php';
@@ -40,7 +43,8 @@ register_activation_hook(__FILE__, function () {
 
 register_deactivation_hook(__FILE__, function () {
     wp_clear_scheduled_hook(Runner::TICK_HOOK);
-    wp_clear_scheduled_hook(Runner::CONTINUE_HOOK);
+    // Ook de events met een taak-ID als argument.
+    wp_unschedule_hook(Runner::CONTINUE_HOOK);
 });
 
 add_filter('cron_schedules', function ($schedules) {

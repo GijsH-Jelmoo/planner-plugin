@@ -31,10 +31,8 @@ class Rewriter
     /** @return array{status:string,value:string,count:int,reason:string} */
     public function rewrite(string $raw): array
     {
-        if (!$this->variants->matches($raw)) {
-            $status = $this->variants->is_suspect($raw) ? self::SUSPECT : self::UNCHANGED;
-            $reason = $status === self::SUSPECT ? 'Bestandsnaam gevonden in een vorm die de plugin niet herkent.' : '';
-            return $this->result($status, $raw, 0, $reason);
+        if (!$this->concerns($raw)) {
+            return $this->no_match($raw);
         }
 
         // Oxygen ondertekent shortcodes; een wijziging daarin zet de code uit.
@@ -51,10 +49,30 @@ class Rewriter
         }
 
         if ($value === $raw) {
-            return $this->result(self::UNCHANGED, $raw, 0, '');
+            return $this->no_match($raw);
         }
 
         return $this->result(self::CHANGED, $value, $this->count, '');
+    }
+
+    /** De URL, of bij een bestand uit de mediabibliotheek alleen de bestandsnaam naast een ID. */
+    private function concerns(string $value): bool
+    {
+        if ($this->variants->matches($value)) {
+            return true;
+        }
+
+        $attachment = $this->variants->attachment();
+
+        return $attachment !== null && $attachment->mentions($value);
+    }
+
+    private function no_match(string $raw): array
+    {
+        $status = $this->variants->is_suspect($raw) ? self::SUSPECT : self::UNCHANGED;
+        $reason = $status === self::SUSPECT ? 'Bestandsnaam gevonden in een vorm die de plugin niet herkent.' : '';
+
+        return $this->result($status, $raw, 0, $reason);
     }
 
     private function rewrite_string(string $value, int $depth): string
@@ -64,7 +82,7 @@ class Rewriter
         }
 
         if (self::looks_serialized($value)) {
-            if (!$this->variants->matches($value)) {
+            if (!$this->concerns($value)) {
                 return $value;
             }
 
@@ -72,6 +90,7 @@ class Rewriter
                 return $this->rewrite_string($inner, $depth + $inner_depth + 1);
             }, $this->variants);
             $new = $parser->rewrite();
+            $this->count += $parser->attachment_count();
 
             if ($new !== $value && @unserialize($new, ['allowed_classes' => false]) === false && $new !== 'b:0;') {
                 throw new SkipRow('Serialized data zou ongeldig worden.');
@@ -80,7 +99,7 @@ class Rewriter
             return $new;
         }
 
-        if (!$this->variants->matches($value)) {
+        if (!$this->concerns($value)) {
             return $value;
         }
 
@@ -94,6 +113,12 @@ class Rewriter
 
         if ($is_json && $this->has_signed_match($decoded)) {
             throw new SkipRow('Ondertekende code: pas deze link in de builder aan.');
+        }
+
+        $attachment = $this->variants->attachment();
+        if ($attachment !== null) {
+            list($value, $ids) = $attachment->rewrite_text($value, $this->variants);
+            $this->count += $ids;
         }
 
         list($new, $count) = $this->variants->replace($value);
@@ -188,12 +213,20 @@ class SerializedParser
     /** @var int */
     private $depth = 0;
 
+    /** @var int */
+    private $attachment_count = 0;
+
     public function __construct(string $data, callable $on_string, Variants $variants)
     {
         $this->data = $data;
         $this->length = strlen($data);
         $this->on_string = $on_string;
         $this->variants = $variants;
+    }
+
+    public function attachment_count(): int
+    {
+        return $this->attachment_count;
     }
 
     public function rewrite(): string
@@ -332,9 +365,8 @@ class SerializedParser
         $this->expect('{');
         $this->depth++;
 
-        $out = '';
+        $entries = [];
         $has_signature = false;
-        $changed = false;
 
         for ($i = 0; $i < $count; $i++) {
             list($key, $name) = $this->key();
@@ -342,13 +374,26 @@ class SerializedParser
 
             $start = $this->pos;
             $value = $this->value();
-            $changed = $changed || $value !== substr($this->data, $start, $this->pos - $start);
 
-            $out .= $key . $value;
+            $entries[] = ['key' => $key, 'name' => $name, 'original' => substr($this->data, $start, $this->pos - $start), 'value' => $value];
         }
 
         $this->depth--;
         $this->expect('}');
+
+        $attachment = $this->variants->attachment();
+        if ($attachment !== null) {
+            $swap = $attachment->swap_entries($entries);
+            $entries = $swap['entries'];
+            $this->attachment_count += $swap['count'];
+        }
+
+        $out = '';
+        $changed = false;
+        foreach ($entries as $entry) {
+            $out .= $entry['key'] . $entry['value'];
+            $changed = $changed || $entry['value'] !== $entry['original'];
+        }
 
         // Bricks controleert de signature tegen de code; die mag niet veranderen.
         if ($has_signature && $changed) {

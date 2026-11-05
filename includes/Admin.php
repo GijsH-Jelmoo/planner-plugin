@@ -20,11 +20,17 @@ class Admin
         });
 
         add_action('admin_enqueue_scripts', [self::class, 'enqueue']);
+        add_filter('admin_body_class', [self::class, 'body_class']);
         add_action('admin_post_jelmoo_planner_create', [self::class, 'handle_create']);
         add_action('admin_post_jelmoo_planner_run', [self::class, 'handle_run']);
         add_action('admin_post_jelmoo_planner_cancel', [self::class, 'handle_cancel']);
         add_action('admin_post_jelmoo_planner_undo', [self::class, 'handle_undo']);
         add_action('wp_ajax_jelmoo_planner_scan', [self::class, 'ajax_scan']);
+    }
+
+    public static function body_class(string $classes): string
+    {
+        return ($_GET['page'] ?? '') === self::PAGE ? $classes . ' jp-admin' : $classes;
     }
 
     public static function enqueue(string $hook): void
@@ -39,6 +45,9 @@ class Admin
         wp_localize_script('jelmoo-planner', 'jelmooPlanner', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce('jelmoo_planner_scan'),
+            'zone' => Time::zone_name(),
+            'zoneLabel' => Time::label(),
+            'now' => time(),
         ]);
     }
 
@@ -50,7 +59,9 @@ class Admin
 
         $view = sanitize_key($_GET['view'] ?? 'list');
 
-        echo '<div class="wrap jelmoo-planner">';
+        // Meldingen van andere plugins plaatst WordPress achter deze lijn, dus boven de Planner.
+        echo '<div class="wrap jp"><hr class="wp-header-end jp-hidden">';
+        self::render_top();
         self::render_notice();
 
         if ($view === 'new') {
@@ -61,67 +72,138 @@ class Admin
             self::render_list();
         }
 
+        echo '<dialog class="jp-dialog" id="jp-dialog"><p id="jp-dialog-text"></p><div class="jp-dialog-actions"><button type="button" class="jp-btn jp-btn-ghost" id="jp-dialog-no">Terug</button><button type="button" class="jp-btn jp-btn-ink" id="jp-dialog-yes">Doorgaan</button></div></dialog>';
         echo '</div>';
+    }
+
+    private static function render_top(): void
+    {
+        $now = time();
+
+        echo '<header class="jp-top">';
+        echo '<a class="jp-brand" href="' . esc_url(self::url()) . '"><span class="jp-mark">' . self::icon('clock') . '</span><span class="jp-brand-name">Planner</span></a>';
+        echo '<div class="jp-clock" title="' . esc_attr('Alle tijden in de Planner zijn ' . Time::label() . ' (' . Time::offset($now) . ')') . '"><span class="jp-clock-now" data-clock>' . esc_html(Time::clock($now)) . '</span><span>' . esc_html(Time::label()) . '</span></div>';
+        echo '<a class="jp-btn jp-btn-ink" href="' . esc_url(self::url(['view' => 'new'])) . '">' . self::icon('plus') . 'Nieuwe taak</a>';
+        echo '</header>';
     }
 
     private static function render_list(): void
     {
-        echo '<h1 class="wp-heading-inline">Planner</h1> ';
-        echo '<a class="page-title-action" href="' . esc_url(self::url(['view' => 'new'])) . '">Nieuwe taak</a><hr class="wp-header-end">';
-
-        self::render_health();
+        echo '<h1 class="jp-hidden">Planner</h1>';
 
         $jobs = Store::list_jobs();
-        if (!$jobs) {
-            echo '<p>Er zijn nog geen taken.</p>';
+        $upcoming = array_values(array_filter($jobs, function ($job) {
+            return in_array($job['status'], ['scheduled', 'preparing', 'applying', 'finishing'], true);
+        }));
+        $past = array_values(array_filter($jobs, function ($job) {
+            return !in_array($job['status'], ['scheduled', 'preparing', 'applying', 'finishing'], true);
+        }));
+
+        // De lijst staat nieuwste eerst; wat ingepland staat lees je van vroeg naar laat.
+        $upcoming = array_reverse($upcoming);
+
+        self::render_hero($upcoming[0] ?? null);
+        self::render_health();
+
+        if ($upcoming) {
+            self::render_rows('Ingepland', $upcoming);
+        }
+
+        if ($past) {
+            self::render_rows('Afgerond', $past);
+        }
+    }
+
+    private static function render_hero(?array $next): void
+    {
+        echo '<section class="jp-hero">';
+
+        if (!$next) {
+            echo '<div class="jp-moment"><span class="jp-eyebrow">Volgende wissel</span><div class="jp-hero-empty">Er staat niets ingepland.</div></div>';
+            echo '<div class="jp-hero-what"><p>Plan een link, bestand of element in. Je ziet vooraf wat er verandert en krijgt achteraf bewijs dat het live staat.</p><a class="jp-btn jp-btn-lime" href="' . esc_url(self::url(['view' => 'new'])) . '">' . self::icon('plus') . 'Nieuwe taak</a></div>';
+            echo '</section>';
             return;
         }
 
-        echo '<table class="widefat striped"><thead><tr><th>Moment</th><th>Soort</th><th>Status</th><th>Oud / pagina</th><th>Nieuw / element</th><th></th></tr></thead><tbody>';
-        foreach ($jobs as $job) {
-            echo '<tr>';
-            echo '<td>' . esc_html(self::local_time($job['run_at'])) . '</td>';
-            echo '<td>' . esc_html(self::type_label($job['type'])) . '</td>';
-            echo '<td>' . self::status_badge($job) . '</td>';
-            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? $job['page_url'] : $job['old_url']) . '</td>';
-            echo '<td class="jp-url">' . esc_html($job['type'] === 'show' ? ShowElement::describe($job) : $job['new_url']) . '</td>';
-            echo '<td><a href="' . esc_url(self::url(['view' => 'job', 'id' => $job['id']])) . '">Bekijken</a></td>';
-            echo '</tr>';
+        self::moment('Volgende wissel', Time::from_utc($next['run_at']), true);
+
+        echo '<div class="jp-hero-what">';
+        echo '<span class="jp-eyebrow">' . esc_html(self::type_label($next['type'])) . '</span>';
+        echo '<p class="jp-hero-title">' . esc_html(self::job_title($next)) . '</p>';
+        echo '<a class="jp-btn jp-btn-outline" href="' . esc_url(self::url(['view' => 'job', 'id' => $next['id']])) . '">Bekijken ' . self::icon('chevron') . '</a>';
+        echo '</div></section>';
+    }
+
+    /** Het tijdstip als het belangrijkste op het scherm, altijd met de tijdzone erbij. */
+    private static function moment(string $label, int $timestamp, bool $is_scheduled): void
+    {
+        echo '<div class="jp-moment">';
+        echo '<span class="jp-eyebrow">' . esc_html($label) . '</span>';
+        echo '<div class="jp-moment-time">' . esc_html(Time::clock($timestamp)) . '</div>';
+        echo '<div class="jp-moment-date">' . esc_html(Time::date($timestamp)) . '</div>';
+        echo '<div class="jp-moment-zone"><span class="jp-pulse"></span>' . esc_html(Time::label() . ' · ' . Time::offset($timestamp)) . '</div>';
+        echo '<div class="jp-moment-count" data-countdown="' . (int) $timestamp . '"' . ($is_scheduled ? ' data-late' : '') . '>' . esc_html(self::relative($timestamp, $is_scheduled)) . '</div>';
+        echo '</div>';
+    }
+
+    private static function relative(int $timestamp, bool $is_scheduled): string
+    {
+        $seconds = $timestamp - time();
+
+        if ($seconds > 0) {
+            return 'over ' . Time::span($seconds);
         }
-        echo '</tbody></table>';
+
+        return Time::span($seconds) . ($is_scheduled ? ' te laat' : ' geleden');
+    }
+
+    private static function render_rows(string $title, array $jobs): void
+    {
+        echo '<section class="jp-section"><h2 class="jp-section-title">' . esc_html($title) . ' <span>' . count($jobs) . '</span></h2><div class="jp-rows">';
+
+        foreach ($jobs as $job) {
+            $moment = Time::from_utc($job['run_at']);
+
+            echo '<a class="jp-row" href="' . esc_url(self::url(['view' => 'job', 'id' => $job['id']])) . '">';
+            echo '<span class="jp-row-time"><b>' . esc_html(Time::clock($moment)) . '</b><small>' . esc_html(Time::short_date($moment)) . '</small></span>';
+            echo '<span class="jp-row-icon">' . self::icon(self::type_icon($job['type'])) . '</span>';
+            echo '<span class="jp-row-main"><strong>' . esc_html(self::job_title($job)) . '</strong><small>' . esc_html(self::type_label($job['type'])) . '</small></span>';
+            echo self::status_badge($job);
+            echo '<span class="jp-row-go">' . self::icon('chevron') . '</span>';
+            echo '</a>';
+        }
+
+        echo '</div></section>';
     }
 
     private static function render_health(): void
     {
         $last_tick = (int) get_option('jelmoo_planner_last_tick');
-        $items = [];
-
-        $items[] = 'Tijdzone van deze site: <strong>' . esc_html(wp_timezone_string()) . '</strong>.';
-
-        if ($last_tick) {
-            $items[] = 'Laatste controle: ' . esc_html(wp_date('j M Y H:i', $last_tick)) . '.';
-        } else {
-            $items[] = 'De planner heeft nog niet gedraaid.';
-        }
-
-        $items[] = 'Builder: ' . esc_html(implode(', ', self::detect_builders())) . '.';
-
-        echo '<p class="jp-health">' . implode(' ', $items) . '</p>';
 
         $overdue = false;
         foreach (Store::due_job_ids() as $id) {
             $job = Store::get_job($id);
-            if ($job && strtotime($job['run_at'] . ' UTC') < time() - 10 * MINUTE_IN_SECONDS) {
+            if ($job && Time::from_utc($job['run_at']) < time() - 10 * MINUTE_IN_SECONDS) {
                 $overdue = true;
             }
         }
 
         if ($overdue) {
-            echo '<div class="notice notice-warning inline"><p><strong>Er staat een taak te laat.</strong> WP-cron draait alleen als een bezoek PHP aanroept, en pagina\'s uit de cache doen dat niet. Stel een servercron in die elke 5 minuten <code>wp-cron.php</code> aanroept als een wissel op tijd moet gebeuren.</p></div>';
+            self::callout('warn', '<strong>Er staat een taak te laat.</strong> WP-Cron draait alleen als een bezoek PHP aanroept, en pagina\'s uit de cache doen dat niet. Stel een servercron in die elke minuut <code>wp-cron.php</code> aanroept als een wissel op tijd moet gebeuren.');
         }
 
         if (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON) {
-            echo '<div class="notice notice-info inline"><p>WP-cron staat uit op deze site (<code>DISABLE_WP_CRON</code>). De planner draait alleen als er een servercron op <code>wp-cron.php</code> is ingesteld.</p></div>';
+            self::callout('info', 'WP-Cron staat uit op deze site (<code>DISABLE_WP_CRON</code>). De Planner draait alleen als er een servercron op <code>wp-cron.php</code> is ingesteld.');
+        }
+
+        echo '<dl class="jp-facts">';
+        echo '<div><dt>Tijden in de Planner</dt><dd>' . esc_html(Time::label() . ' (' . Time::offset(time()) . ')') . '</dd></div>';
+        echo '<div><dt>Laatste controle</dt><dd>' . ($last_tick ? '<span data-countdown="' . $last_tick . '">' . esc_html(self::relative($last_tick, false)) . '</span>' : 'Nog niet gedraaid') . '</dd></div>';
+        echo '<div><dt>Builder</dt><dd>' . esc_html(implode(', ', self::detect_builders())) . '</dd></div>';
+        echo '</dl>';
+
+        if (wp_timezone()->getName() !== Time::zone_name()) {
+            echo '<p class="jp-footnote">WordPress staat op deze site op ' . esc_html(wp_timezone_string()) . '. Dat maakt voor de Planner niet uit: die rekent altijd met ' . esc_html(Time::label()) . '.</p>';
         }
     }
 
@@ -150,88 +232,119 @@ class Admin
 
     private static function render_new(): void
     {
-        $tomorrow = new \DateTimeImmutable('tomorrow', wp_timezone());
+        $tomorrow = (new \DateTimeImmutable('tomorrow 09:00', Time::zone()))->getTimestamp();
         $user = wp_get_current_user();
 
-        echo '<h1>Nieuwe taak</h1>';
-        echo '<p><a href="' . esc_url(self::url()) . '">&larr; Terug naar de lijst</a></p>';
+        echo '<a class="jp-back" href="' . esc_url(self::url()) . '">' . self::icon('back') . 'Alle taken</a>';
+        echo '<h1 class="jp-title">Nieuwe taak</h1>';
 
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" id="jp-form">';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" id="jp-form" class="jp-layout">';
         wp_nonce_field('jelmoo_planner_create');
         echo '<input type="hidden" name="action" value="jelmoo_planner_create">';
 
-        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<div class="jp-main">';
 
-        echo '<tr><th scope="row">Soort</th><td><fieldset>';
-        echo '<label><input type="radio" name="type" value="link" checked> <strong>Link wisselen</strong>: elke knop en menulink naar de oude URL gaat naar de nieuwe URL</label><br>';
-        echo '<label><input type="radio" name="type" value="file"> <strong>Bestand vervangen</strong>: de URL blijft gelijk en krijgt nieuwe inhoud, voor een geprinte QR-code</label><br>';
-        echo '<label><input type="radio" name="type" value="show"> <strong>Element tonen</strong>: een element dat in de builder op display: none staat wordt zichtbaar</label>';
-        echo '</fieldset></td></tr>';
+        self::step_open(1, 'Wat moet er gebeuren?');
+        echo '<div class="jp-types">';
+        self::type_card('link', 'link', 'Link wisselen', 'Elke knop, menulink en verwijzing gaat naar een nieuw bestand of nieuwe URL. Ook voor afbeeldingen.', true);
+        self::type_card('file', 'file', 'Bestand vervangen', 'De URL blijft gelijk en krijgt nieuwe inhoud, bijvoorbeeld voor een geprinte QR-code.', false);
+        self::type_card('show', 'eye', 'Element tonen', 'Een element dat in de builder op display: none staat wordt zichtbaar.', false);
+        echo '</div>';
+        self::step_close();
 
-        echo '<tr data-for="link file"><th scope="row"><label for="jp-old" data-link="Oude URL" data-file="URL die gelijk blijft">Oude URL</label></th><td>';
-        echo '<input type="url" class="large-text" name="old_url" id="jp-old" required> <button type="button" class="button jp-pick" data-target="jp-old">Mediabibliotheek</button>';
-        echo '</td></tr>';
+        self::step_open(2, 'Waar gaat het om?');
+        echo '<div class="jp-field" data-for="link file"><label for="jp-old" data-link="Oude URL" data-file="URL die gelijk blijft">Oude URL</label>';
+        echo '<div class="jp-input-row"><input type="url" name="old_url" id="jp-old" placeholder="https://" required><button type="button" class="jp-btn jp-btn-ghost jp-pick" data-target="jp-old">Mediabibliotheek</button></div></div>';
 
-        echo '<tr data-for="link file"><th scope="row"><label for="jp-new" data-link="Nieuwe URL" data-file="Nieuw bestand">Nieuwe URL</label></th><td>';
-        echo '<input type="url" class="large-text" name="new_url" id="jp-new" required> <button type="button" class="button jp-pick" data-target="jp-new">Mediabibliotheek</button>';
-        echo '</td></tr>';
+        echo '<div class="jp-field" data-for="link file"><label for="jp-new" data-link="Nieuwe URL" data-file="Nieuw bestand">Nieuwe URL</label>';
+        echo '<div class="jp-input-row"><input type="url" name="new_url" id="jp-new" placeholder="https://" required><button type="button" class="jp-btn jp-btn-ghost jp-pick" data-target="jp-new">Mediabibliotheek</button></div>';
+        echo '<p class="jp-help" data-for="link">Kies een bestand uit de mediabibliotheek, dan gaan ook kleinere versies en verwijzingen via het bestands-ID mee.</p></div>';
 
-        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-page">Pagina</label></th><td>';
-        echo '<input type="url" class="large-text" name="page_url" id="jp-page" value="' . esc_attr(home_url('/')) . '">';
-        echo '<p class="description">Een pagina van deze site waarop het element staat. Hierop controleert de plugin het resultaat.</p>';
-        echo '</td></tr>';
+        echo '<div class="jp-field" data-for="show" hidden><label for="jp-page">Pagina</label><input type="url" name="page_url" id="jp-page" value="' . esc_attr(home_url('/')) . '"><p class="jp-help">Een pagina van deze site waarop het element staat. Hierop controleert de plugin het resultaat.</p></div>';
 
-        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-selector">Element</label></th><td>';
-        echo '<input type="text" class="regular-text" name="selector" id="jp-selector" placeholder="#brxe-abc123">';
-        echo '<p class="description">Het ID (#brxe-abc123) of de class (.embleem) van het element zelf, dus niet van de hele sectie.</p>';
-        echo '</td></tr>';
+        echo '<div class="jp-field-pair" data-for="show" hidden>';
+        echo '<div class="jp-field"><label for="jp-selector">Element tonen</label><input type="text" name="selector" id="jp-selector" class="jp-mono" placeholder="#brxe-abc123"><p class="jp-help">Het ID of de class van het element zelf, niet van de hele sectie.</p></div>';
+        echo '<div class="jp-field"><label for="jp-hide">Tegelijk verbergen <em>optioneel</em></label><input type="text" name="hide_selector" id="jp-hide" class="jp-mono" placeholder="#brxe-xyz789"><p class="jp-help">Verdwijnt op hetzelfde moment, bijvoorbeeld het oude embleem.</p></div>';
+        echo '</div>';
 
-        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-hide">Tegelijk verbergen</label></th><td>';
-        echo '<input type="text" class="regular-text" name="hide_selector" id="jp-hide" placeholder="#brxe-xyz789">';
-        echo '<p class="description">Optioneel. Dit element verdwijnt op hetzelfde moment, bijvoorbeeld het oude embleem dat door het nieuwe wordt vervangen.</p>';
-        echo '</td></tr>';
-
-        echo '<tr data-for="show" hidden><th scope="row"><label for="jp-display">Tonen als</label></th><td>';
-        echo '<select name="display_value" id="jp-display">';
+        echo '<div class="jp-field jp-field-narrow" data-for="show" hidden><label for="jp-display">Tonen als</label><select name="display_value" id="jp-display">';
         foreach (ShowElement::VALUES as $value) {
             echo '<option value="' . esc_attr($value) . '">' . esc_html($value) . '</option>';
         }
-        echo '</select>';
-        echo '</td></tr>';
+        echo '</select></div>';
+        self::step_close();
 
-        echo '<tr><th scope="row"><label for="jp-run">Moment</label></th><td>';
-        echo '<input type="datetime-local" name="run_at" id="jp-run" required value="' . esc_attr($tomorrow->format('Y-m-d\TH:i')) . '">';
-        echo '<p class="description">Tijdzone: ' . esc_html(wp_timezone_string()) . '. De wissel gebeurt binnen ongeveer 5 minuten na dit moment. Dat kan later zijn als de site geen bezoek krijgt dat PHP aanroept.</p>';
-        echo '</td></tr>';
+        self::step_open(3, 'Wanneer?');
+        echo '<div class="jp-field-pair">';
+        echo '<div class="jp-field"><label for="jp-run">Datum en tijd</label><div class="jp-with-zone"><input type="datetime-local" name="run_at" id="jp-run" required value="' . esc_attr(Time::input_value($tomorrow)) . '"><span>' . esc_html(Time::label()) . '</span></div></div>';
+        echo '<div class="jp-field"><label for="jp-mail">Resultaat mailen naar</label><input type="email" name="mail_to" id="jp-mail" value="' . esc_attr($user->user_email) . '"></div>';
+        echo '</div>';
+        self::step_close();
 
-        echo '<tr><th scope="row"><label for="jp-mail">Resultaat mailen naar</label></th><td>';
-        echo '<input type="email" class="regular-text" name="mail_to" id="jp-mail" value="' . esc_attr($user->user_email) . '">';
-        echo '</td></tr>';
-
-        echo '</tbody></table>';
-
-        echo '<p><button type="button" class="button button-secondary" id="jp-scan">Scannen</button> <span id="jp-scan-status" aria-live="polite"></span></p>';
+        self::step_open(4, 'Controleren');
+        echo '<p class="jp-help jp-help-lead">De scan laat zien wat er verandert. Er wordt nog niets gewijzigd.</p>';
+        echo '<div class="jp-scan-bar"><button type="button" class="jp-btn jp-btn-ink" id="jp-scan">' . self::icon('search') . 'Scannen</button><span id="jp-scan-status" aria-live="polite"></span></div>';
         echo '<div id="jp-preview"></div>';
+        echo '<details class="jp-limits" data-for="link file"><summary>Wat de scan niet ziet</summary><p>Eigen tabellen van plugins (zoals sliders), themabestanden, Code Snippets en gecodeerde blokken (zoals raw HTML in WPBakery). Een afbeelding die alleen met een bestands-ID is opgeslagen, zonder URL of bestandsnaam ernaast, wordt ook niet gewijzigd. De paginacontrole na de wissel meldt het als er nog iets ouds zichtbaar is. Haal oude WP Crontrol-events voor dezelfde wissel weg, anders kunnen ze hem terugdraaien.</p></details>';
+        self::step_close();
 
-        echo '<p class="description jp-limits" data-for="link file">Niet in de scan: eigen tabellen van plugins (zoals sliders), themabestanden en Code Snippets. Verwijzingen via een bestands-ID en gecodeerde blokken (zoals raw HTML in WPBakery) worden ook niet gevonden; de paginacontrole na de wissel meldt het als zo\'n link zichtbaar blijft. Haal oude WP Crontrol-events voor dezelfde wissel weg, anders kunnen ze hem terugdraaien.</p>';
+        echo '</div>';
 
-        echo '<p><button type="submit" class="button button-primary" id="jp-submit" disabled>Inplannen</button></p>';
+        echo '<aside class="jp-side"><div class="jp-night jp-sticky">';
+        echo '<span class="jp-eyebrow">Gaat live op</span>';
+        echo '<div class="jp-moment-time" id="jp-live-time">' . esc_html(Time::clock($tomorrow)) . '</div>';
+        echo '<div class="jp-moment-date" id="jp-live-date">' . esc_html(Time::date($tomorrow)) . '</div>';
+        echo '<div class="jp-moment-zone"><span class="jp-pulse"></span>' . esc_html(Time::label()) . '</div>';
+        echo '<div class="jp-moment-count" id="jp-live-count">' . esc_html(self::relative($tomorrow, false)) . '</div>';
+        echo '<button type="submit" class="jp-btn jp-btn-lime jp-btn-wide" id="jp-submit" disabled>Inplannen</button>';
+        echo '<p class="jp-side-hint" id="jp-submit-hint">Scan eerst wat er verandert.</p>';
+        echo '</div></aside>';
+
         echo '</form>';
+    }
+
+    private static function step_open(int $number, string $title): void
+    {
+        echo '<section class="jp-card jp-step"><h2 class="jp-step-title"><span>' . (int) $number . '</span>' . esc_html($title) . '</h2>';
+    }
+
+    private static function step_close(): void
+    {
+        echo '</section>';
+    }
+
+    private static function type_card(string $value, string $icon, string $title, string $text, bool $checked): void
+    {
+        echo '<label class="jp-type"><input type="radio" name="type" value="' . esc_attr($value) . '"' . ($checked ? ' checked' : '') . '><span class="jp-type-box"><span class="jp-type-icon">' . self::icon($icon) . '</span><strong>' . esc_html($title) . '</strong><small>' . esc_html($text) . '</small></span></label>';
     }
 
     private static function render_job(int $id): void
     {
         $job = Store::get_job($id);
         if (!$job) {
-            echo '<h1>Taak niet gevonden</h1><p><a href="' . esc_url(self::url()) . '">&larr; Terug naar de lijst</a></p>';
+            echo '<a class="jp-back" href="' . esc_url(self::url()) . '">' . self::icon('back') . 'Alle taken</a><h1 class="jp-title">Taak niet gevonden</h1>';
             return;
         }
 
-        echo '<h1>' . esc_html(self::type_label($job['type'])) . ' ' . self::status_badge($job) . '</h1>';
-        echo '<p><a href="' . esc_url(self::url()) . '">&larr; Terug naar de lijst</a></p>';
+        $planned = Time::from_utc($job['run_at']);
+        $finished = !empty($job['finished_at']) ? Time::from_utc($job['finished_at']) : 0;
 
-        echo '<table class="form-table" role="presentation"><tbody>';
-        self::detail_row('Moment', self::local_time($job['run_at']));
+        echo '<a class="jp-back" href="' . esc_url(self::url()) . '">' . self::icon('back') . 'Alle taken</a>';
+        echo '<div class="jp-title-row"><h1 class="jp-title">' . esc_html(self::job_title($job)) . '</h1>' . self::status_badge($job) . '</div>';
+        echo '<p class="jp-subtitle">' . esc_html(self::type_label($job['type'])) . '</p>';
+
+        echo '<div class="jp-layout"><div class="jp-main">';
+
+        if ($finished && $finished - $planned > 10 * MINUTE_IN_SECONDS) {
+            self::callout('warn', '<strong>Deze taak liep ' . esc_html(Time::span($finished - $planned)) . ' achter.</strong> Gepland was ' . esc_html(Time::full($planned)) . '. WP-Cron draait alleen als een bezoek PHP aanroept. Stel een servercron in die elke minuut <code>wp-cron.php</code> aanroept als een wissel op tijd moet gebeuren.');
+        }
+
+        $tones = ['failed' => 'bad', 'warning' => 'warn', 'done' => 'good'];
+        foreach ($job['report']['messages'] ?? [] as $message) {
+            self::callout($tones[$job['status']] ?? 'info', esc_html($message));
+        }
+
+        echo '<section class="jp-card"><h2 class="jp-card-title">Details</h2><dl class="jp-details">';
         if ($job['type'] === 'show') {
             self::detail_row('Pagina', (string) $job['page_url']);
             self::detail_row('Element', ShowElement::describe($job));
@@ -239,54 +352,66 @@ class Admin
             self::detail_row($job['type'] === 'file' ? 'URL die gelijk blijft' : 'Oude URL', $job['old_url']);
             self::detail_row($job['type'] === 'file' ? 'Nieuw bestand' : 'Nieuwe URL', $job['new_url']);
         }
+        self::detail_row('Gepland', Time::full($planned));
+        if ($finished) {
+            self::detail_row('Uitgevoerd', Time::full($finished));
+        }
+        if (!empty($job['next_check_at'])) {
+            self::detail_row('Volgende nacontrole', Time::full(Time::from_utc($job['next_check_at'])));
+        }
         if ($job['mail_to'] !== '') {
             self::detail_row('Resultaat naar', $job['mail_to']);
         }
-        if (!empty($job['finished_at'])) {
-            self::detail_row('Uitgevoerd', self::local_time($job['finished_at']));
-        }
-        if (!empty($job['next_check_at'])) {
-            self::detail_row('Volgende nacontrole', self::local_time($job['next_check_at']));
-        }
-        echo '</tbody></table>';
-
-        self::render_actions($job);
-
-        foreach ($job['report']['messages'] ?? [] as $message) {
-            echo '<div class="notice notice-info inline"><p>' . esc_html($message) . '</p></div>';
-        }
+        echo '</dl></section>';
 
         if (!empty($job['report']['pages'])) {
-            echo '<h2>Paginacontrole</h2><table class="widefat striped"><tbody>';
+            echo '<section class="jp-card"><h2 class="jp-card-title">Paginacontrole</h2><ul class="jp-checks">';
             foreach ($job['report']['pages'] as $page) {
-                echo '<tr><td>' . esc_html(Runner::page_label($page['result'])) . '</td><td><a href="' . esc_url($page['url']) . '">' . esc_html($page['url']) . '</a></td></tr>';
+                $good = in_array($page['result'], ['ok', 'shown'], true);
+                echo '<li class="' . ($good ? 'is-good' : 'is-bad') . '">' . self::icon($good ? 'check' : 'alert') . '<span>' . esc_html(Runner::page_label($page['result'])) . '</span><a href="' . esc_url($page['url']) . '" target="_blank" rel="noopener">' . esc_html($page['url']) . '</a></li>';
             }
-            echo '</tbody></table>';
-        }
+            echo '</ul>';
 
-        foreach ($job['report']['checks'] ?? [] as $check) {
-            $old = count(array_filter($check['pages'], function ($page) {
-                return $page['result'] === 'old';
-            }));
+            foreach ($job['report']['checks'] ?? [] as $check) {
+                $old = count(array_filter($check['pages'], function ($page) {
+                    return $page['result'] === 'old';
+                }));
+                $when = Time::full(Time::from_utc($check['at']));
 
-            if ($job['type'] === 'show') {
-                echo '<p>Nacontrole ' . esc_html(self::local_time($check['at'])) . ': ' . esc_html(Runner::page_label($check['pages'][0]['result'] ?? 'error')) . '.</p>';
-                continue;
+                if ($job['type'] === 'show') {
+                    echo '<p class="jp-check-note">Nacontrole ' . esc_html($when) . ': ' . esc_html(Runner::page_label($check['pages'][0]['result'] ?? 'error')) . '.</p>';
+                    continue;
+                }
+
+                echo '<p class="jp-check-note">Nacontrole ' . esc_html($when) . ': ' . (int) count($check['unexpected']) . ' nieuwe plek(ken) in de database, ' . (int) $old . ' pagina(\'s) met de oude link.</p>';
             }
 
-            echo '<p>Nacontrole ' . esc_html(self::local_time($check['at'])) . ': ' . (int) count($check['unexpected']) . ' nieuwe plek(ken) in de database, ' . (int) $old . ' pagina(\'s) met de oude link.</p>';
+            echo '</section>';
         }
 
         $rows = Store::row_summaries($id);
         if ($rows) {
-            echo '<h2>Plekken</h2><table class="widefat striped"><thead><tr><th>Plek</th><th>Veld</th><th>Status</th><th>Treffers</th><th>Toelichting</th></tr></thead><tbody>';
+            echo '<section class="jp-card jp-card-table"><h2 class="jp-card-title">Plekken</h2><div class="jp-table-wrap"><table class="jp-table"><thead><tr><th>Plek</th><th>Veld</th><th>Status</th><th>Treffers</th><th>Toelichting</th></tr></thead><tbody>';
             foreach ($rows as $row) {
                 $where = Scanner::describe($row['target'], $row['col'], (int) $row['owner_id'], $row['field']);
                 $label = $where['edit_url'] !== '' ? '<a href="' . esc_url($where['edit_url']) . '">' . esc_html($where['label']) . '</a>' : esc_html($where['label']);
                 echo '<tr><td>' . $label . '</td><td><code>' . esc_html($where['detail']) . '</code></td><td>' . esc_html(Runner::state_label($row['state'])) . '</td><td>' . (int) $row['matches'] . '</td><td>' . esc_html($row['reason']) . '</td></tr>';
             }
-            echo '</tbody></table>';
+            echo '</tbody></table></div></section>';
         }
+
+        echo '</div><aside class="jp-side"><div class="jp-night jp-sticky">';
+
+        if ($finished) {
+            self::moment('Uitgevoerd op', $finished, false);
+        } elseif ($job['status'] === 'cancelled') {
+            self::moment('Was gepland op', $planned, false);
+        } else {
+            self::moment('Gaat live op', $planned, true);
+        }
+
+        self::render_actions($job);
+        echo '</div></aside></div>';
     }
 
     private static function render_actions(array $job): void
@@ -294,13 +419,13 @@ class Admin
         echo '<div class="jp-actions">';
 
         if ($job['status'] === 'scheduled') {
-            self::action_button('jelmoo_planner_run', $job['id'], 'Nu uitvoeren', 'button-primary', 'De wissel gaat nu meteen live. Doorgaan?');
-            self::action_button('jelmoo_planner_cancel', $job['id'], 'Annuleren', 'button-secondary', 'Deze taak annuleren?');
+            self::action_button('jelmoo_planner_run', $job['id'], 'Nu uitvoeren', 'jp-btn-lime', 'De wissel gaat nu meteen live. Doorgaan?');
+            self::action_button('jelmoo_planner_cancel', $job['id'], 'Annuleren', 'jp-btn-outline', 'Deze taak annuleren?');
         }
 
         if (Runner::can_undo($job)) {
             $confirm = $job['type'] === 'show' ? 'Terugdraaien? Staat het element in de builder nog op display: none, dan verdwijnt het weer.' : 'De wissel terugdraaien?';
-            self::action_button('jelmoo_planner_undo', $job['id'], 'Ongedaan maken', 'button-secondary', $confirm);
+            self::action_button('jelmoo_planner_undo', $job['id'], 'Ongedaan maken', 'jp-btn-outline', $confirm);
         }
 
         echo '</div>';
@@ -308,17 +433,25 @@ class Admin
 
     private static function action_button(string $action, int $id, string $label, string $class, string $confirm): void
     {
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" class="jp-inline" data-confirm="' . esc_attr($confirm) . '">';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-confirm="' . esc_attr($confirm) . '">';
         wp_nonce_field($action . '_' . $id);
         echo '<input type="hidden" name="action" value="' . esc_attr($action) . '">';
         echo '<input type="hidden" name="id" value="' . (int) $id . '">';
-        echo '<button type="submit" class="button ' . esc_attr($class) . '">' . esc_html($label) . '</button>';
-        echo '</form> ';
+        echo '<button type="submit" class="jp-btn jp-btn-wide ' . esc_attr($class) . '">' . esc_html($label) . '</button>';
+        echo '</form>';
     }
 
     private static function detail_row(string $label, string $value): void
     {
-        echo '<tr><th scope="row">' . esc_html($label) . '</th><td class="jp-url">' . esc_html($value) . '</td></tr>';
+        echo '<div><dt>' . esc_html($label) . '</dt><dd>' . esc_html($value) . '</dd></div>';
+    }
+
+    /** $html is al ge-escapet door de aanroeper. */
+    private static function callout(string $tone, string $html): void
+    {
+        $icons = ['good' => 'check', 'warn' => 'alert', 'bad' => 'alert', 'info' => 'info'];
+
+        echo '<div class="jp-callout jp-callout-' . esc_attr($tone) . '">' . self::icon($icons[$tone] ?? 'info') . '<p>' . $html . '</p></div>';
     }
 
     public static function handle_create(): void
@@ -330,7 +463,7 @@ class Admin
         $new_url = self::clean_url($_POST['new_url'] ?? '');
         $show = self::posted_show();
         $mail_to = sanitize_email(wp_unslash($_POST['mail_to'] ?? ''));
-        $run_at = \DateTimeImmutable::createFromFormat('Y-m-d\TH:i', sanitize_text_field(wp_unslash($_POST['run_at'] ?? '')), wp_timezone());
+        $run_at = Time::parse(sanitize_text_field(wp_unslash($_POST['run_at'] ?? '')));
 
         $error = '';
         if ($type === 'show') {
@@ -347,9 +480,9 @@ class Admin
             }
         }
 
-        if ($error === '' && !$run_at) {
-            $error = 'Het moment is niet geldig.';
-        } elseif ($error === '' && $run_at->getTimestamp() <= time()) {
+        if ($error === '' && $run_at === null) {
+            $error = 'Dit moment bestaat niet. Kies een andere datum of tijd; bij de overgang naar zomertijd wordt 02:00 tot 03:00 overgeslagen.';
+        } elseif ($error === '' && $run_at <= time()) {
             $error = 'Het moment ligt in het verleden. Kies een moment in de toekomst.';
         }
 
@@ -359,7 +492,7 @@ class Admin
 
         $id = Store::create_job([
             'type' => $type,
-            'run_at' => gmdate('Y-m-d H:i:s', $run_at->getTimestamp()),
+            'run_at' => gmdate('Y-m-d H:i:s', $run_at),
             'old_url' => $type === 'show' ? '' : $old_url,
             'new_url' => $type === 'show' ? '' : $new_url,
             'selector' => $type === 'show' ? $show['selector'] : '',
@@ -369,7 +502,9 @@ class Admin
             'mail_to' => $mail_to,
         ]);
 
-        self::redirect(['view' => 'job', 'id' => $id], 'De taak is ingepland.', 'success');
+        Runner::schedule_job($id, $run_at);
+
+        self::redirect(['view' => 'job', 'id' => $id], 'Ingepland: ' . Time::full($run_at) . '.', 'success');
     }
 
     public static function handle_run(): void
@@ -383,7 +518,15 @@ class Admin
             Runner::tick();
         }
 
-        self::redirect(['view' => 'job', 'id' => $id], 'De taak is gestart.', 'success');
+        $status = (string) (Store::get_job($id)['status'] ?? '');
+        $outcomes = [
+            'done' => ['Uitgevoerd en op de pagina\'s gecontroleerd.', 'success'],
+            'warning' => ['Uitgevoerd, maar er is iets om te controleren. Lees de meldingen hieronder.', 'warning'],
+            'failed' => ['Niet gelukt. Lees de melding hieronder.', 'error'],
+        ];
+        $outcome = $outcomes[$status] ?? ['De taak is gestart en is nog bezig. Ververs deze pagina straks.', 'warning'];
+
+        self::redirect(['view' => 'job', 'id' => $id], $outcome[0], $outcome[1]);
     }
 
     public static function handle_cancel(): void
@@ -443,6 +586,8 @@ class Admin
 
         $cursor = json_decode(wp_unslash($_POST['cursor'] ?? '[]'), true) ?: [];
         $warnings = [];
+        $notes = [];
+        $plan = Attachments::plan($old_url, $new_url);
 
         // Alleen bij het eerste stuk: de beslissing valt pas bij het uitvoeren.
         if (!$cursor) {
@@ -450,9 +595,15 @@ class Admin
             if ($check['message'] !== '') {
                 $warnings[] = $check['message'];
             }
+
+            $warnings = array_merge($warnings, self::attachment_warnings($plan));
+
+            if ($plan['refs'] !== null) {
+                $notes[] = 'Beide bestanden staan in de mediabibliotheek. De bestands-ID\'s en kleinere versies gaan mee, dus ook de builder toont het nieuwe bestand.';
+            }
         }
 
-        $variants = new Variants($old_url, $new_url, home_url('/'));
+        $variants = new Variants($old_url, $new_url, home_url('/'), $plan['also'], $plan['refs']);
         $rewriter = new Rewriter($variants);
         $rows = [];
 
@@ -473,7 +624,28 @@ class Admin
             ];
         });
 
-        wp_send_json_success(['rows' => $rows, 'cursor' => $cursor, 'done' => !empty($cursor['done']), 'warnings' => $warnings]);
+        wp_send_json_success(['rows' => $rows, 'cursor' => $cursor, 'done' => !empty($cursor['done']), 'warnings' => $warnings, 'notes' => $notes]);
+    }
+
+    /** @return string[] */
+    private static function attachment_warnings(array $plan): array
+    {
+        global $wpdb;
+
+        if (!$plan['old_id']) {
+            return [];
+        }
+
+        if (!$plan['new_id']) {
+            return ['De oude URL is een bestand uit de mediabibliotheek, de nieuwe niet. Builders die via het bestands-ID werken, blijven dan het oude bestand tonen. Kies het nieuwe bestand uit de mediabibliotheek.'];
+        }
+
+        $featured = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = '_thumbnail_id' AND meta_value = %d",
+            $plan['old_id']
+        ));
+
+        return $featured ? [sprintf('%d bericht(en) of pagina(\'s) gebruiken dit bestand als uitgelichte afbeelding. Die worden niet gewijzigd.', $featured)] : [];
     }
 
     private static function posted_type(): string
@@ -636,12 +808,30 @@ class Admin
         }
 
         delete_transient($key);
-        echo '<div class="notice notice-' . esc_attr($notice['type']) . ' is-dismissible"><p>' . esc_html($notice['message']) . '</p></div>';
+
+        $tones = ['success' => 'good', 'warning' => 'warn', 'error' => 'bad'];
+        self::callout($tones[$notice['type']] ?? 'info', esc_html($notice['message']));
     }
 
-    private static function local_time(string $utc): string
+    /** "oud.pdf → nieuw.pdf": wat het om gaat, zonder de hele URL. */
+    private static function job_title(array $job): string
     {
-        return wp_date('j M Y H:i', strtotime($utc . ' UTC'));
+        if ($job['type'] === 'show') {
+            return $job['selector'] . (!empty($job['hide_selector']) ? ' in plaats van ' . $job['hide_selector'] : ' tonen');
+        }
+
+        if ($job['type'] === 'file') {
+            return self::short_url($job['old_url']) . ' krijgt nieuwe inhoud';
+        }
+
+        return self::short_url($job['old_url']) . ' → ' . self::short_url($job['new_url']);
+    }
+
+    private static function short_url(string $url): string
+    {
+        $name = rawurldecode(wp_basename((string) wp_parse_url($url, PHP_URL_PATH)));
+
+        return $name !== '' ? $name : (string) wp_parse_url($url, PHP_URL_HOST);
     }
 
     private static function type_label(string $type): string
@@ -649,6 +839,13 @@ class Admin
         $labels = ['file' => 'Bestand vervangen', 'show' => 'Element tonen'];
 
         return $labels[$type] ?? 'Link wisselen';
+    }
+
+    private static function type_icon(string $type): string
+    {
+        $icons = ['file' => 'file', 'show' => 'eye'];
+
+        return $icons[$type] ?? 'link';
     }
 
     private static function status_badge(array $job): string
@@ -659,7 +856,7 @@ class Admin
             'applying' => 'Bezig',
             'finishing' => 'Bezig',
             'done' => 'Geslaagd',
-            'warning' => 'Gedaan, controleer dit',
+            'warning' => 'Controleer dit',
             'failed' => 'Mislukt',
             'cancelled' => 'Geannuleerd',
             'undone' => 'Ongedaan gemaakt',
@@ -668,5 +865,24 @@ class Admin
         $status = $job['status'];
 
         return '<span class="jp-status jp-status-' . esc_attr($status) . '">' . esc_html($labels[$status] ?? $status) . '</span>';
+    }
+
+    private static function icon(string $name): string
+    {
+        $paths = [
+            'clock' => '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+            'plus' => '<path d="M12 5v14M5 12h14"/>',
+            'back' => '<path d="M15 6l-6 6 6 6"/>',
+            'chevron' => '<path d="M9 6l6 6-6 6"/>',
+            'link' => '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+            'file' => '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+            'eye' => '<path d="M2.5 12S6 5.5 12 5.5 21.500 12 21.500 12 18 18.500 12 18.500 2.500 12 2.500 12z"/><circle cx="12" cy="12" r="2.800"/>',
+            'search' => '<circle cx="11" cy="11" r="6.500"/><path d="M16 16l4.500 4.500"/>',
+            'check' => '<path d="M5 12.500l4.500 4.500L19 7.500"/>',
+            'alert' => '<path d="M12 8.500v4.500M12 16.500v.01"/><path d="M10.300 4l-8 14a2 2 0 0 0 1.700 3h16a2 2 0 0 0 1.700-3l-8-14a2 2 0 0 0-3.400 0z"/>',
+            'info' => '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.01"/>',
+        ];
+
+        return '<svg class="jp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . ($paths[$name] ?? '') . '</svg>';
     }
 }
